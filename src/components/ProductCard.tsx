@@ -1,8 +1,22 @@
 import svgPaths from "../imports/svg-gomaw2gej1";
+import { memo, useState, useEffect, useMemo, useCallback } from "react";
 import { MessageCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useCart } from "../context/CartContext";
+import { useAuth } from "../context/AuthContext";
+import { toast } from "sonner@2.0.3";
+import { projectId, publicAnonKey } from "../utils/supabase/info";
 
 const img1 = "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400";
+
+// Cart Icon Component
+function CartIcon() {
+  return (
+    <svg className="block size-6" fill="none" preserveAspectRatio="none" viewBox="0 0 22 20">
+      <path d={svgPaths.p3af0f200} fill="black" />
+    </svg>
+  );
+}
 
 interface ProductCardProps {
   hasDiscount?: boolean;
@@ -28,7 +42,7 @@ const ProductCardComponent = ({
   const { isLoggedIn } = useAuth();
   const [reviewCount, setReviewCount] = useState(0);
   
-  // Supabase에서 리뷰 개수 가져오기
+  // Supabase에서 리뷰 개수 가���오기
   useEffect(() => {
     const fetchReviewCount = async () => {
       try {
