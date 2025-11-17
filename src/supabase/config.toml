@@ -1,0 +1,10 @@
+# Supabase Configuration
+# Project: zjwcmbiibopprmaadgqm
+
+[project]
+project_id = "zjwcmbiibopprmaadgqm"
+
+# Edge Functions Configuration
+# Disable JWT verification for the 'api' function to allow public health checks
+[functions.api]
+verify_jwt = false

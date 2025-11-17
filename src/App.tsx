@@ -48,8 +48,11 @@ export default function App() {
         <Router>
           <ScrollToTop />
           <div className="bg-white min-h-screen pb-16 lg:pb-0">
-            <Header />
-            <Navigation />
+            {/* Sticky Header + Navigation Container */}
+            <div className="sticky top-0 z-50 bg-white">
+              <Header />
+              <Navigation />
+            </div>
             <Suspense fallback={<LoadingFallback />}>
               <Routes>
                 <Route path="/" element={<MainPage />} />

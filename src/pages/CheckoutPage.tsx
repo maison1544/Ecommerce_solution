@@ -5,6 +5,7 @@ import { toast } from "sonner@2.0.3";
 import { Home, Building, Plus, ChevronDown } from "lucide-react";
 import { createClient } from "../utils/supabase/client";
 import { projectId } from "../utils/supabase/info";
+import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 
 interface CheckoutProduct {
   productId: number;
@@ -37,6 +38,7 @@ export default function CheckoutPage() {
   const [selectedAddressId, setSelectedAddressId] = useState<number | null>(null);
   const [showAddressForm, setShowAddressForm] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isLoadingAddresses, setIsLoadingAddresses] = useState(true);
   
   const [addressData, setAddressData] = useState({
     name: "",
@@ -57,14 +59,14 @@ export default function CheckoutPage() {
     name: ""
   });
 
-  // 배송지 로드
+  // Load addresses
   const loadAddresses = async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/addresses`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/addresses`,
         {
           headers: {
             'Authorization': `Bearer ${session.access_token}`,
@@ -76,7 +78,7 @@ export default function CheckoutPage() {
         const data = await response.json();
         setAddresses(data.addresses || []);
         
-        // 기본 배송지 선택
+        // Select default address
         const defaultAddr = data.addresses?.find((addr: Address) => addr.isDefault);
         if (defaultAddr) {
           setSelectedAddressId(defaultAddr.id);
@@ -86,12 +88,15 @@ export default function CheckoutPage() {
       }
     } catch (error) {
       console.error('Failed to load addresses:', error);
+      setAddresses([]);
+    } finally {
+      setIsLoadingAddresses(false);
     }
   };
 
-  // 장바구니 또는 직접 구매 상품 로드
-  const loadProducts = async () => {
-    try {
+  // Load items - Check if type is "direct" or "cart"
+  useEffect(() => {
+    const loadItems = async () => {
       const state = location.state as { type: "direct" | "cart"; productId?: number; quantity?: number } | null;
       
       if (!state) {
@@ -103,7 +108,7 @@ export default function CheckoutPage() {
       if (state.type === "direct" && state.productId) {
         // 직접 구매 - API에서 상품 정보 조회
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/products`,
+          `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/products`,
           {
             headers: {
               'Authorization': `Bearer ${await getAccessToken()}`,
@@ -127,40 +132,37 @@ export default function CheckoutPage() {
         }
       } else if (state.type === "cart") {
         // 장바구니에서 구매
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) return;
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!session) return;
 
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/cart`,
-          {
-            headers: {
-              'Authorization': `Bearer ${session.access_token}`,
+          const response = await fetch(
+            `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/cart`,
+            {
+              headers: {
+                'Authorization': `Bearer ${session.access_token}`,
+              }
             }
-          }
-        );
+          );
 
-        if (response.ok) {
-          const data = await response.json();
-          setProducts(data.cart?.map((item: any) => ({
-            productId: item.productId,
-            name: item.name,
-            price: item.price,
-            quantity: item.quantity,
-            image: item.image
-          })) || []);
+          if (response.ok) {
+            const data = await response.json();
+            setProducts(data.cart?.map((item: any) => ({
+              productId: item.productId,
+              name: item.name,
+              price: item.price,
+              quantity: item.quantity,
+              image: item.image
+            })) || []);
+          }
+        } catch (error) {
+          console.error('Failed to load cart items:', error);
+          toast.error("장바구니 정보를 불러오는데 실패했습니다");
+          navigate("/");
         }
       }
-    } catch (error) {
-      console.error('Failed to load products:', error);
-      toast.error("상품 정보를 불러오는데 실패했습니다");
-      navigate("/");
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
 
-  // 로그인 체크 및 데이터 로드
-  useEffect(() => {
     if (!isLoggedIn) {
       toast.error("로그인이 필요합니다");
       navigate("/login");
@@ -168,7 +170,7 @@ export default function CheckoutPage() {
     }
 
     loadAddresses();
-    loadProducts();
+    loadItems();
   }, [isLoggedIn, navigate]);
 
   // Validation functions
@@ -254,7 +256,7 @@ export default function CheckoutPage() {
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/addresses`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/addresses`,
         {
           method: 'POST',
           headers: {
@@ -293,7 +295,7 @@ export default function CheckoutPage() {
       return;
     }
 
-    // 새 ��송지 등록 중인 경우
+    // 새 배송지 등록 중인 경우
     if (showAddressForm) {
       toast.error("배송지를 먼저 저장해주세요");
       return;
@@ -335,7 +337,7 @@ export default function CheckoutPage() {
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/orders`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/orders`,
         {
           method: 'POST',
           headers: {
@@ -356,7 +358,7 @@ export default function CheckoutPage() {
           try {
             // 모든 장바구니 아이템 삭제 요청
             const cartResponse = await fetch(
-              `https://${projectId}.supabase.co/functions/v1/api/cart/clear`,
+              `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/cart/clear`,
               {
                 method: 'DELETE',
                 headers: {
@@ -421,7 +423,7 @@ export default function CheckoutPage() {
           <div className="space-y-4">
             {products.map((product, index) => (
               <div key={index} className="flex items-center gap-4 pb-4 border-b last:border-b-0">
-                <img
+                <ImageWithFallback
                   src={product.image}
                   alt={product.name}
                   className="w-20 h-20 object-cover rounded"

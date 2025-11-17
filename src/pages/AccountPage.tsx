@@ -59,7 +59,7 @@ export default function AccountPage() {
         if (!token) return;
 
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/orders`,
+          `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/orders`,
           {
             headers: {
               'Authorization': `Bearer ${token}`,

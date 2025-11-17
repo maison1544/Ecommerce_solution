@@ -1,11 +1,24 @@
 import svgPaths from "../imports/svg-gomaw2gej1";
 import { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
 import { ChevronDown, ChevronUp, Shield } from "lucide-react";
+import { useNavigate, Link } from "react-router-dom";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
 
-const img = "https://images.unsplash.com/photo-1560393464-5c69a73c5770?w=400";
+// Logo Component
+function Logo() {
+  return (
+    <div className="flex flex-col items-center justify-center">
+      <div className="text-2xl lg:text-4xl font-bold tracking-tight">
+        <span className="text-black">Solution</span>
+        <span className="text-[#b78b1f]"> Studio</span>
+      </div>
+      <div className="text-[8px] lg:text-[10px] tracking-[0.3em] text-gray-600 mt-0.5 lg:mt-1 uppercase">
+        Premium Shopping
+      </div>
+    </div>
+  );
+}
 
 // Header Icons
 function SearchIcon() {
@@ -55,7 +68,7 @@ export function Header() {
   };
   
   return (
-    <header className="bg-white border-b border-white sticky top-0 z-50">
+    <header className="bg-white border-b border-white">
       <div className="container mx-auto px-4 lg:px-8">
         <div className="flex flex-col lg:grid lg:grid-cols-3 lg:items-center gap-4 py-4 lg:py-6">
           {/* Search - Desktop Left */}
@@ -76,7 +89,7 @@ export function Header() {
 
           {/* Logo - Center */}
           <Link to="/" className="order-1 lg:order-2 flex justify-center">
-            <img alt="로고" className="h-16 lg:h-[87px] w-auto object-contain" src={img} />
+            <Logo />
           </Link>
 
           {/* Icons - Desktop Right */}
@@ -143,7 +156,7 @@ export function Navigation() {
   ];
 
   return (
-    <nav className="bg-white border-b sticky top-[116px] lg:top-[131px] z-40">
+    <nav className="bg-white border-b">
       <div className="container mx-auto px-4 lg:px-8">
         {/* Desktop Menu */}
         <div className="hidden lg:block overflow-x-auto scrollbar-hide">

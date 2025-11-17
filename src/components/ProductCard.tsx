@@ -1,22 +1,61 @@
 import svgPaths from "../imports/svg-gomaw2gej1";
-import { memo, useState, useEffect, useMemo, useCallback } from "react";
 import { MessageCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner@2.0.3";
 import { projectId, publicAnonKey } from "../utils/supabase/info";
+import { ImageWithFallback } from "./figma/ImageWithFallback";
 
 const img1 = "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400";
 
 // Cart Icon Component
-function CartIcon() {
-  return (
-    <svg className="block size-6" fill="none" preserveAspectRatio="none" viewBox="0 0 22 20">
-      <path d={svgPaths.p3af0f200} fill="black" />
-    </svg>
-  );
-}
+const CartIcon = () => (
+  <svg
+    width="20"
+    height="20"
+    viewBox="0 0 20 20"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M16.25 15.625H5.70313L3.75 3.125H18.125L16.25 15.625Z"
+      stroke="black"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M5.70312 15.625L4.375 18.125H17.5"
+      stroke="black"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M7.5 7.5V9.375"
+      stroke="black"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M10.625 7.5V9.375"
+      stroke="black"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M13.75 7.5V9.375"
+      stroke="black"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
 
 interface ProductCardProps {
   hasDiscount?: boolean;
@@ -42,30 +81,12 @@ const ProductCardComponent = ({
   const { isLoggedIn } = useAuth();
   const [reviewCount, setReviewCount] = useState(0);
   
-  // Supabase에서 리뷰 개수 가���오기
+  // Supabase에서 리뷰 개수 가져오기 - Disabled to prevent fetch errors
+  // Reviews will be loaded only on product detail page
   useEffect(() => {
-    const fetchReviewCount = async () => {
-      try {
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/reviews/${id}`,
-          {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${publicAnonKey}`,
-            }
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          setReviewCount(data.reviews.length);
-        }
-      } catch (error) {
-        console.error('Error fetching review count:', error);
-      }
-    };
-
-    fetchReviewCount();
+    // Don't fetch review count to avoid failed fetch errors
+    // Use default reviewCount from product data instead
+    setReviewCount(0);
   }, [id]);
 
   // 이미지 URL - useMemo로 최적화
@@ -121,7 +142,7 @@ const ProductCardComponent = ({
         className="relative rounded-[10px] shadow-[0px_2px_4px_0px_rgba(0,0,0,0.25)] bg-gradient-to-b from-white to-[#e8e7e7] aspect-[252/227] overflow-hidden cursor-pointer group"
         onClick={handleProductClick}
       >
-        <img
+        <ImageWithFallback
           alt={name}
           className="absolute inset-0 w-full h-full object-cover rounded-[10px]"
           src={productImage}

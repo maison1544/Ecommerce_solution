@@ -1,8 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { Product } from "../data/products";
+import { Product, products as localProducts } from "../data/products";
 import { ProductCard } from "../components/ProductCard";
-import { projectId, publicAnonKey } from "../utils/supabase/info";
 
 export default function SearchResultsPage() {
   const [searchParams] = useSearchParams();
@@ -10,33 +9,11 @@ export default function SearchResultsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load products from API
+  // Load products from local data
   useEffect(() => {
-    const loadProducts = async () => {
-      try {
-        setIsLoading(true);
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/products`,
-          {
-            headers: {
-              "Authorization": `Bearer ${publicAnonKey}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          setProducts(data.products || []);
-        }
-      } catch (error) {
-        console.error('Failed to load products:', error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadProducts();
+    setIsLoading(true);
+    setProducts(localProducts);
+    setIsLoading(false);
   }, []);
 
   // useMemo로 검색 결과 최적화

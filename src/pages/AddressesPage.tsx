@@ -5,6 +5,7 @@ import { toast } from "sonner@2.0.3";
 import { useAuth } from "../context/AuthContext";
 import { createClient } from "../utils/supabase/client";
 import { projectId } from "../utils/supabase/info";
+import { useDebounceCallback } from "../utils/useDebounce";
 
 interface Address {
   id: number;
@@ -52,7 +53,7 @@ export default function AddressesPage() {
       if (!session) return;
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/addresses`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/addresses`,
         {
           headers: {
             'Authorization': `Bearer ${session.access_token}`,
@@ -220,7 +221,7 @@ export default function AddressesPage() {
       if (editingId !== null) {
         // 수정
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/addresses/${editingId}`,
+          `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/addresses/${editingId}`,
           {
             method: 'PUT',
             headers: {
@@ -242,7 +243,7 @@ export default function AddressesPage() {
       } else {
         // 추가
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/addresses`,
+          `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/addresses`,
           {
             method: 'POST',
             headers: {
@@ -279,7 +280,7 @@ export default function AddressesPage() {
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/addresses/${id}`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/addresses/${id}`,
         {
           method: 'DELETE',
           headers: {
@@ -313,7 +314,7 @@ export default function AddressesPage() {
       if (!address) return;
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/addresses/${id}`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/addresses/${id}`,
         {
           method: 'PUT',
           headers: {
@@ -356,7 +357,7 @@ export default function AddressesPage() {
             배송지 관리
           </h1>
           <p className="text-sm lg:text-base text-black font-bold tracking-wider uppercase">
-            자주 사용하는 배송지를 등록하고 관리하세요
+            자주 사용하는 배송지를 등록���고 관리하세요
           </p>
           <div className="h-px bg-black mt-5" />
         </div>

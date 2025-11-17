@@ -7,13 +7,14 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const { login, isLoggedIn } = useAuth();
 
-  // 이미 로그인된 상태면 홈으로 리다이렉트
+  // 이미 로그인된 상태면 홈으로 리다이렉트 (마운트 시에만 체크)
   useEffect(() => {
     if (isLoggedIn) {
       toast.info("이미 로그인되어 있습니다");
       navigate("/", { replace: true });
     }
-  }, [isLoggedIn, navigate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // 빈 배열 - 마운트 시에만 실행
 
   const [formData, setFormData] = useState({
     email: "",
@@ -53,6 +54,8 @@ export default function LoginPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    console.log('🔐 LoginPage: handleSubmit called');
+    
     // Validate all fields
     const validationErrors = {
       email: validateEmail(formData.email),
@@ -62,14 +65,18 @@ export default function LoginPage() {
     setErrors(validationErrors);
     
     if (validationErrors.email || validationErrors.password) {
+      console.log('❌ LoginPage: Validation failed', validationErrors);
       return;
     }
 
+    console.log('✅ LoginPage: Validation passed, calling login...');
     setIsLoading(true);
 
     try {
       // Supabase 로그인
       const result = await login(formData.email.trim(), formData.password);
+      
+      console.log('📊 LoginPage: Login result:', result);
       
       if (result.success) {
         toast.success("로그인 성공!");

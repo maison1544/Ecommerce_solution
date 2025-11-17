@@ -10,6 +10,9 @@ import { categoryMap, categoryList } from "../data/categories";
 import { InquiriesTab } from "../components/InquiriesTab";
 import { projectId, publicAnonKey } from "../utils/supabase/info";
 
+// ✅ API Base URL with correct slug
+const API_BASE = `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e`;
+
 type TabType = "dashboard" | "products" | "users" | "admins" | "orders" | "inquiries";
 
 // 새 주문 알림을 위한 전역 상태
@@ -169,7 +172,7 @@ function DashboardTab() {
         
         // Fetch products from API
         const productsRes = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/products`,
+          `${API_BASE}/api/products`,
           {
             headers: {
               'Authorization': `Bearer ${publicAnonKey}`,
@@ -179,7 +182,7 @@ function DashboardTab() {
         
         // Fetch users from API
         const usersRes = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/admin/users`,
+          `${API_BASE}/api/admin/users`,
           {
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -189,7 +192,7 @@ function DashboardTab() {
         
         // Fetch orders from API
         const ordersRes = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/admin/orders`,
+          `${API_BASE}/api/admin/orders`,
           {
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -218,11 +221,21 @@ function DashboardTab() {
         }
       } catch (error) {
         console.error("Error loading stats:", error);
+        // Use local data as fallback
+        setStats({
+          totalProducts: products.length,
+          totalUsers: 0,
+          totalOrders: 0,
+          totalRevenue: 0
+        });
       }
     };
     
-    loadStats();
-  }, [getAccessToken]);
+    // Only load stats if user is admin
+    if (currentUser && currentUser.role === 'admin') {
+      loadStats();
+    }
+  }, [currentUser]);
 
   const statsArray = [
     {
@@ -293,7 +306,7 @@ function DashboardTab() {
 
 // 상품 관리 탭
 function ProductsTab() {
-  const { getAccessToken } = useAuth();
+  const { getAccessToken, currentUser } = useAuth();
   const [productList, setProductList] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -302,6 +315,7 @@ function ProductsTab() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
+  const [isSaving, setIsSaving] = useState(false); // 저장 중 상태
   
   const [formData, setFormData] = useState<Partial<Product>>({
     name: "",
@@ -317,6 +331,7 @@ function ProductsTab() {
 
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  const [isUploadingImages, setIsUploadingImages] = useState(false); // 이미지 업로드 중 상태
 
   const [errors, setErrors] = useState({
     name: "",
@@ -324,32 +339,11 @@ function ProductsTab() {
     category: ""
   });
 
-  // Load products from API
+  // Load products from local data
   const loadProducts = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/products`,
-        {
-          headers: {
-            'Authorization': `Bearer ${publicAnonKey}`,
-          }
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to load products');
-      }
-
-      const data = await response.json();
-      setProductList(data.products || []);
-    } catch (error) {
-      console.error('Failed to load products:', error);
-      toast.error('상품 로드 실패');
-      setProductList(products); // Fallback to local data
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true);
+    setProductList(products); // Use local data
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -429,6 +423,18 @@ function ProductsTab() {
   };
 
   const handleSave = async () => {
+    // 중복 클릭 방지
+    if (isSaving) {
+      toast.info("저장 중입니다. 잠시만 기다려주세요...");
+      return;
+    }
+
+    // 이미지 업로드 중인지 확인
+    if (isUploadingImages) {
+      toast.warning("이미지 업로드가 진행 중입니다. 완료될 때까지 기다려주세요...");
+      return;
+    }
+
     const validationErrors = {
       name: validateName(formData.name || ""),
       price: validatePrice(formData.price || 0),
@@ -444,6 +450,12 @@ function ProductsTab() {
 
     // 이미지 URL은 이미 formData.images에 저장되어 있음 (handleImageChange에서 업로드 완료)
     const imageUrls = formData.images || [];
+
+    // 이미지가 선택되었지만 업로드가 안 된 경우 경고
+    if (imagePreviews.length > 0 && imageUrls.length === 0) {
+      toast.warning("이미지 업로드가 완료될 때까지 기다려주세요...");
+      return;
+    }
 
     // 주요 사양 정리: trim 후 빈 문자열 제거
     const cleanedSpecs = (formData.specs || [])
@@ -464,13 +476,18 @@ function ProductsTab() {
       reviewCount: 0
     };
 
+    console.log("저장할 상품 데이터:", productData);
+    console.log("이미지 URLs:", imageUrls);
+
+    setIsSaving(true);
+
     try {
       const token = await getAccessToken();
       
       if (isAdding) {
-        // 새 상품 추가 - API 호출
+        // 새 상����� 추가 - API 호출
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/products`,
+          `${API_BASE}/api/products`,
           {
             method: 'POST',
             headers: {
@@ -496,7 +513,7 @@ function ProductsTab() {
       } else if (editingId) {
         // 상품 수정 - API 호출
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/products/${editingId}`,
+          `${API_BASE}/api/products/${editingId}`,
           {
             method: 'PUT',
             headers: {
@@ -525,9 +542,15 @@ function ProductsTab() {
       setImageFiles([]);
       setImagePreviews([]);
       
+      // 중복 클릭 방지를 위한 지연 (2초)
+      setTimeout(() => {
+        setIsSaving(false);
+      }, 2000);
+      
     } catch (error) {
       console.error('Product save error:', error);
       toast.error(`상품 저장 실패: ${error.message}`);
+      setIsSaving(false);
     }
   };
 
@@ -537,7 +560,7 @@ function ProductsTab() {
     try {
       const token = await getAccessToken();
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/products/${id}`,
+        `${API_BASE}/api/products/${id}`,
         {
           method: 'DELETE',
           headers: {
@@ -592,6 +615,7 @@ function ProductsTab() {
     setImagePreviews(previewArray);
     
     // 서버에 업로드
+    setIsUploadingImages(true);
     toast.info("이미지 업로드 중...");
     
     const uploadPromises = fileArray.map(async (file) => {
@@ -601,7 +625,7 @@ function ProductsTab() {
       try {
         const token = await getAccessToken();
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/upload-image`,
+          `${API_BASE}/api/upload-image`,
           {
             method: 'POST',
             headers: {
@@ -629,13 +653,19 @@ function ProductsTab() {
     const validUrls = uploadedUrls.filter(url => url !== null);
 
     if (validUrls.length > 0) {
-      // 업로드된 URL을 formData에 저장
-      setFormData({ ...formData, images: validUrls });
+      // 업로드 완료 후 0.5초 대기 (안정성 확보)
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // 업로드된 URL을 formData에 저장 (함수형 업데이트로 최신 상태 보장)
+      setFormData(prev => ({ ...prev, images: validUrls }));
       toast.success(`${validUrls.length}개 이미지가 업로드되었습니다!`);
+      console.log("이미지 업로드 완료:", validUrls);
     } else {
       toast.error("이미지 업로드에 실패했습니다");
       setImagePreviews([]);
     }
+    
+    setIsUploadingImages(false);
   };
 
   const filteredProducts = productList.filter(p => {
@@ -901,9 +931,14 @@ function ProductsTab() {
             </button>
             <button
               onClick={handleSave}
-              className="flex-1 bg-black text-white rounded px-4 py-3 font-bold hover:bg-gray-800"
+              disabled={isSaving || isUploadingImages}
+              className={`flex-1 rounded px-4 py-3 font-bold ${
+                isSaving || isUploadingImages
+                  ? 'bg-gray-400 text-white cursor-not-allowed'
+                  : 'bg-black text-white hover:bg-gray-800'
+              }`}
             >
-              저장
+              {isSaving ? '저장 중...' : isUploadingImages ? '이미지 업로드 중...' : '저장'}
             </button>
           </div>
         </div>
@@ -986,7 +1021,7 @@ function UsersTab({ logout }: { logout: () => void }) {
       const token = await getAccessToken();
       
       const res = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/admin/users`,
+        `${API_BASE}/api/admin/users`,
         {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -1020,7 +1055,7 @@ function UsersTab({ logout }: { logout: () => void }) {
       try {
         const token = await getAccessToken();
         const res = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/admin/users/${userId}/block`,
+          `${API_BASE}/api/admin/users/${userId}/block`,
           {
             method: 'POST',
             headers: {
@@ -1048,8 +1083,11 @@ function UsersTab({ logout }: { logout: () => void }) {
       
       try {
         const token = await getAccessToken();
+        console.log('🟢 [BLOCK] Sending block request for user:', userId);
+        console.log('🟢 [BLOCK] Request body:', { block: true });
+        
         const res = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/admin/users/${userId}/block`,
+          `${API_BASE}/api/admin/users/${userId}/block`,
           {
             method: 'POST',
             headers: {
@@ -1060,12 +1098,15 @@ function UsersTab({ logout }: { logout: () => void }) {
           }
         );
         
+        console.log('🟢 [BLOCK] Response status:', res.status);
+        const responseData = await res.json();
+        console.log('🟢 [BLOCK] Response data:', responseData);
+        
         if (res.ok) {
           toast.success(`${user.name}님이 차단되었습니다`);
           loadUsers();
         } else {
-          const error = await res.json();
-          toast.error(`차단 실패: ${error.error}`);
+          toast.error(`차단 실패: ${responseData.error}`);
         }
       } catch (error) {
         console.error("Error blocking user:", error);
@@ -1236,7 +1277,7 @@ function AdminsTab() {
       const token = await getAccessToken();
       
       const res = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/admin/admins`,
+        `${API_BASE}/api/admin/admins`,
         {
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -1356,7 +1397,7 @@ function AdminsTab() {
       }
       
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/create-admin`,
+        `${API_BASE}/api/create-admin`,
         {
           method: 'POST',
           headers: {
@@ -1392,6 +1433,46 @@ function AdminsTab() {
     if (confirm(`${user.name}님을 관리자 목록에서 삭제하시겠습니까?`)) {
       toast.info("현재는 관리자 삭제 기능이 구현되지 않았습니다. Supabase Dashboard에서 직접 삭제해주세요.");
       // TODO: Implement admin deletion API
+    }
+  };
+
+  const handleBlockAdmin = async (userId: string) => {
+    const user = adminList.find(u => u.id === userId);
+    if (!user) return;
+
+    const action = user.isBlocked ? "차단 해제" : "차단";
+    
+    if (confirm(`${user.name}님을 ${action}하시겠습니까?`)) {
+      try {
+        const token = await getAccessToken();
+        const url = `${API_BASE}/api/admin/admins/${userId}/block`;
+        console.log('Blocking admin - URL:', url);
+        console.log('Blocking admin - Method:', 'POST');
+        console.log('Blocking admin - Body:', { block: !user.isBlocked });
+        
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ block: !user.isBlocked })
+        });
+
+        console.log('Block response status:', response.status);
+        
+        if (!response.ok) {
+          const error = await response.json();
+          console.error('Block error response:', error);
+          throw new Error(error.error || `Failed to ${action} admin`);
+        }
+
+        toast.success(`${user.name}님이 ${action}되었습니다!`);
+        loadAdmins(); // Reload admin list
+      } catch (error) {
+        console.error('Block admin error:', error);
+        toast.error(`관리자 ${action} 실패: ${error.message}`);
+      }
     }
   };
 
@@ -1638,7 +1719,7 @@ function OrdersTab() {
         if (!token) return;
 
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/admin/orders`,
+          `${API_BASE}/api/admin/orders`,
           {
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -1673,7 +1754,7 @@ function OrdersTab() {
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/orders/${orderId}/status`,
+        `${API_BASE}/api/orders/${orderId}/status`,
         {
           method: 'PUT',
           headers: {

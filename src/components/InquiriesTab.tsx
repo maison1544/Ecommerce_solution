@@ -27,6 +27,7 @@ export function InquiriesTab() {
   const [currentPage, setCurrentPage] = useState(1);
   const [answerText, setAnswerText] = useState<{ [key: string]: string }>({});
   const [loading, setLoading] = useState(true);
+  const [submittingAnswers, setSubmittingAnswers] = useState<{ [key: string]: boolean }>({});
   const itemsPerPage = 10;
 
   // 문의 목록 로드
@@ -37,7 +38,7 @@ export function InquiriesTab() {
         if (!token) return;
 
         const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/admin/inquiries`,
+          `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/admin/inquiries`,
           {
             headers: {
               'Authorization': `Bearer ${token}`,
@@ -61,24 +62,33 @@ export function InquiriesTab() {
     };
 
     loadInquiries();
-  }, []);
+  }, [getAccessToken]);
 
   const handleAnswerSubmit = async (inquiryId: string) => {
+    // 중복 클릭 방지
+    if (submittingAnswers[inquiryId]) {
+      toast.info("답변 등록 중입니다...");
+      return;
+    }
+
     const answer = answerText[inquiryId];
     if (!answer || !answer.trim()) {
       toast.error("답변 내용을 입력해주세요");
       return;
     }
 
+    setSubmittingAnswers({ ...submittingAnswers, [inquiryId]: true });
+
     try {
       const token = await getAccessToken();
       if (!token) {
         toast.error("인증 정보가 없습니다");
+        setSubmittingAnswers({ ...submittingAnswers, [inquiryId]: false });
         return;
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/inquiries/${inquiryId}/answer`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/inquiries/${inquiryId}/answer`,
         {
           method: 'PUT',
           headers: {
@@ -97,12 +107,19 @@ export function InquiriesTab() {
         ));
         setAnswerText({ ...answerText, [inquiryId]: "" });
         toast.success("문의에 답변이 등록되었습니다!");
+        
+        // 1초 후 버튼 재활성화
+        setTimeout(() => {
+          setSubmittingAnswers(prev => ({ ...prev, [inquiryId]: false }));
+        }, 1000);
       } else {
         toast.error("답변 등록에 실패했습니다");
+        setSubmittingAnswers({ ...submittingAnswers, [inquiryId]: false });
       }
     } catch (error) {
       console.error('Failed to submit answer:', error);
       toast.error("답변 등록에 실패했습니다");
+      setSubmittingAnswers({ ...submittingAnswers, [inquiryId]: false });
     }
   };
 
@@ -222,9 +239,14 @@ export function InquiriesTab() {
                     />
                     <button
                       onClick={() => handleAnswerSubmit(inquiry.id)}
-                      className="mt-2 bg-black text-white rounded px-6 py-2 font-bold hover:bg-gray-800"
+                      disabled={submittingAnswers[inquiry.id]}
+                      className={`mt-2 rounded px-6 py-2 font-bold ${
+                        submittingAnswers[inquiry.id]
+                          ? 'bg-gray-400 text-white cursor-not-allowed'
+                          : 'bg-black text-white hover:bg-gray-800'
+                      }`}
                     >
-                      답변 등록
+                      {submittingAnswers[inquiry.id] ? '등록 중...' : '답변 등록'}
                     </button>
                   </div>
                 )}

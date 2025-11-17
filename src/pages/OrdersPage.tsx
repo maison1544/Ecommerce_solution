@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Package, Truck, CheckCircle, XCircle } from "lucide-react";
+import { Package, Truck, CheckCircle, XCircle, Search } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { createClient } from "../utils/supabase/client";
 import { projectId } from "../utils/supabase/info";
+import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 
 interface OrderItem {
   id: number;
@@ -47,7 +48,7 @@ export default function OrdersPage() {
       if (!session) return;
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/orders`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/orders`,
         {
           headers: {
             'Authorization': `Bearer ${session.access_token}`,
@@ -192,7 +193,7 @@ export default function OrdersPage() {
                     {order.items.map((item) => (
                       <div key={item.id} className="flex gap-4">
                         <div className="w-20 h-20 bg-gray-100 rounded flex-shrink-0 overflow-hidden">
-                          <img
+                          <ImageWithFallback
                             src={item.image}
                             alt={item.name}
                             className="w-full h-full object-cover"

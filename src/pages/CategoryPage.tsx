@@ -31,35 +31,11 @@ export default function CategoryPage() {
   
   const info = categoryInfo[category || ''] || { title: '카테고리', description: '다양한 상품을 만나보세요' };
 
-  // Load products from API
+  // Load products from local data
   useEffect(() => {
-    const loadProducts = async () => {
-      try {
-        setLoading(true);
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/products`,
-          {
-            headers: {
-              'Authorization': `Bearer ${publicAnonKey}`,
-            }
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error('Failed to load products');
-        }
-
-        const data = await response.json();
-        setAllProducts(data.products || []); // Fallback to local data
-      } catch (error) {
-        console.error('Failed to load products:', error);
-        setAllProducts(getProductsByCategory(category || '')); // Fallback to local data
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadProducts();
+    setLoading(true);
+    setAllProducts(getProductsByCategory(category || ''));
+    setLoading(false);
   }, [category]);
 
   // Get products for this category

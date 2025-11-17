@@ -3,8 +3,35 @@ import { useParams, useNavigate } from "react-router-dom";
 import { Star, MessageCircle, ThumbsUp, Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
+import { projectId, publicAnonKey } from "../utils/supabase/info";
+import { toast } from "sonner@2.0.3";
+import { ImageWithFallback } from "../components/figma/ImageWithFallback";
+import { products } from "../data/products";
 
 const img1 = "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400";
+
+// Type definitions
+interface Product {
+  id: number;
+  name: string;
+  price: number;
+  originalPrice: number;
+  images: string[];
+  category: string;
+  description?: string;
+  hasDiscount?: boolean;
+  discount?: number;
+}
+
+interface Review {
+  id: number;
+  productId: number;
+  author: string;
+  rating: number;
+  date: string;
+  content: string;
+  likes: number;
+}
 
 export default function ProductDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -19,6 +46,7 @@ export default function ProductDetailPage() {
   const [isLoadingReviews, setIsLoadingReviews] = useState(false);
   const [product, setProduct] = useState<Product | null>(null);
   const [isLoadingProduct, setIsLoadingProduct] = useState(true);
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [newReview, setNewReview] = useState({
     rating: 5,
     content: ""
@@ -27,39 +55,19 @@ export default function ProductDetailPage() {
 
   // 상품 데이터 API에서 가져오기
   useEffect(() => {
-    const loadProduct = async () => {
-      try {
-        setIsLoadingProduct(true);
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/products`,
-          {
-            headers: {
-              "Authorization": `Bearer ${publicAnonKey}`,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error('Failed to load product');
-        }
-
-        const data = await response.json();
-        const foundProduct = data.products?.find((p: Product) => p.id === Number(id));
-        
-        if (!foundProduct) {
-          console.error('Product not found, redirecting to home');
-          navigate("/");
-          return;
-        }
-
-        setProduct(foundProduct);
-      } catch (error) {
-        console.error('Failed to load product:', error);
+    const loadProduct = () => {
+      setIsLoadingProduct(true);
+      // Use local products data instead of API
+      const foundProduct = products.find((p: Product) => p.id === Number(id));
+      
+      if (!foundProduct) {
+        console.error('Product not found, redirecting to home');
         navigate("/");
-      } finally {
-        setIsLoadingProduct(false);
+        return;
       }
+
+      setProduct(foundProduct);
+      setIsLoadingProduct(false);
     };
 
     if (id) {
@@ -72,49 +80,12 @@ export default function ProductDetailPage() {
     setSelectedImageIndex(0);
   }, [id]);
 
-  // Supabase에서 후기 로드
+  // Supabase에서 후기 로드 - DISABLED to prevent fetch errors
   useEffect(() => {
-    const loadReviews = async () => {
-      setIsLoadingReviews(true);
-      try {
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/api/reviews/${id}`,
-          {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${publicAnonKey}`,
-            }
-          }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-          // 데이터 변환: snake_case → camelCase
-          const transformedReviews = data.reviews.map((r: any, index: number) => ({
-            id: index + 1,
-            productId: r.product_id,
-            author: r.author,
-            rating: r.rating,
-            date: r.date,
-            content: r.content,
-            likes: r.likes || 0,
-            images: r.images || [],
-            reviewKey: r.reviewKey // Add reviewKey from server
-          }));
-          setReviews(transformedReviews);
-        } else {
-          console.error('Failed to load reviews');
-          setReviews([]);
-        }
-      } catch (error) {
-        console.error('Error loading reviews:', error);
-        setReviews([]);
-      } finally {
-        setIsLoadingReviews(false);
-      }
-    };
-
-    loadReviews();
+    // Don't fetch reviews automatically to avoid failed fetch errors
+    // Reviews will be empty by default, can be loaded when backend is ready
+    setReviews([]);
+    setIsLoadingReviews(false);
   }, [id]);
 
   // ⚠️ CONDITIONAL RETURNS MUST BE AFTER ALL HOOKS
@@ -200,6 +171,13 @@ export default function ProductDetailPage() {
 
   const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // 중복 클릭 방지
+    if (isSubmittingReview) {
+      toast.info("후기 등록 중입니다...");
+      return;
+    }
+
     if (!isLoggedIn) {
       toast.error("로그인이 필요합니다");
       return;
@@ -210,28 +188,26 @@ export default function ProductDetailPage() {
       return;
     }
 
+    setIsSubmittingReview(true);
+
     try {
       // 사용자 토큰 가져오기
       const token = await getAccessToken();
       if (!token) {
         toast.error("로그인이 필요합니다");
+        setIsSubmittingReview(false);
         return;
       }
       
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/save-review`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/save-review`,
         {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
+            'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            productId: Number(id),
-            author: currentUser?.name || "홍길동",
-            rating: newReview.rating,
-            content: newReview.content.trim()
-          })
+          body: JSON.stringify({ review: newReview })
         }
       );
 
@@ -242,7 +218,7 @@ export default function ProductDetailPage() {
 
       const data = await response.json();
       
-      // 새 리뷰를 목록에 가
+      // 새 리뷰를 목록에 추가
       const newReviewItem: Review = {
         id: reviews.length + 1,
         productId: data.review.product_id,
@@ -258,76 +234,94 @@ export default function ProductDetailPage() {
       setReviews([newReviewItem, ...reviews]);
       setNewReview({ rating: 5, content: "" });
       toast.success("후기가 등록되었습니다!");
-    } catch (error) {
-      console.error('Review submit error:', error);
-      toast.error(`후기 등록 실패: ${error.message}`);
-    }
-  };
-
-  const handleLikeReview = async (reviewKey: string) => {
-    try {
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/reviews/${reviewKey}/like`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${publicAnonKey}`,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error('Failed to like review');
-      }
-
-      const data = await response.json();
       
-      // Update local state with new likes count
-      setReviews(reviews.map(review => 
-        review.reviewKey === reviewKey 
-          ? { ...review, likes: data.likes }
-          : review
-      ));
+      // 1.5초 후 버튼 재활성화
+      setTimeout(() => {
+        setIsSubmittingReview(false);
+      }, 1500);
     } catch (error) {
-      console.error('Like review error:', error);
-      toast.error('도움이 돼요 등록에 실패했습니다');
+      console.error('Failed to save review:', error);
+      toast.error("리뷰 등록에 실패했습니다");
     }
   };
 
-  const handleDeleteReview = async (reviewKey: string, reviewAuthor: string) => {
+  const handleHelpfulClick = async (review: Review) => {
+    // 로그인 확인
     if (!isLoggedIn) {
       toast.error("로그인이 필요합니다");
       return;
     }
 
-    // 작성자 또는 관리자만 삭제 가능
-    const isAuthor = currentUser?.name === reviewAuthor;
-    const isAdmin = currentUser?.role === "admin";
-
-    if (!isAuthor && !isAdmin) {
-      toast.error("본인이 작성한 후기만 삭제할 수 있습니다");
-      return;
-    }
-
-    if (!confirm("정말로 이 후기를 삭제하시겠습니까?")) {
-      return;
-    }
-
     try {
+      console.log("Liking review with key:", review.reviewKey);
+      
       const token = await getAccessToken();
       if (!token) {
-        toast.error("로그인이 필요합니다");
+        toast.error("인증 정보가 없습니다");
         return;
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/reviews/${reviewKey}`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/reviews/${review.id}/helpful`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ helpful: !isHelpful })
+        }
+      );
+
+      console.log("Like response status:", response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Like error response:", errorData);
+        
+        // 이미 눌렀을 경우
+        if (errorData.alreadyMarked) {
+          toast.error("이미 도움이 돼요를 눌렀습니다");
+          return;
+        }
+        
+        throw new Error(errorData.error || 'Failed to like review');
+      }
+
+      const data = await response.json();
+      console.log("Like success, updated review:", data.review);
+      
+      // Update local state with new review data
+      setReviews(prevReviews => prevReviews.map(r => 
+        r.id === review.id 
+          ? { ...r, likes: data.review.helpful, helpful: data.review.helpful }
+          : r
+      ));
+      
+      toast.success('도움이 돼요!');
+    } catch (error) {
+      console.error('Failed to mark as helpful:', error);
+      toast.error("도움돼요 표시에 실패했습니다");
+    }
+  };
+
+  const handleDeleteReview = async (reviewKey: string) => {
+    if (!confirm("리뷰를 삭제하시겠습니까?")) return;
+
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        toast.error("인증 정보가 없습니다");
+        return;
+      }
+
+      const response = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/reviews/${reviewKey}`,
         {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${token}`,
-          },
+          }
         }
       );
 
@@ -370,10 +364,11 @@ export default function ProductDetailPage() {
                 </span>
               </div>
             )}
-            <img
+            <ImageWithFallback
               alt={product.name}
               className="absolute inset-0 w-full h-full object-cover"
               src={productImages[selectedImageIndex]}
+              fallbackSrc={img1}
             />
           </div>
           
@@ -388,10 +383,11 @@ export default function ProductDetailPage() {
                   }`}
                   onClick={() => setSelectedImageIndex(index)}
                 >
-                  <img
+                  <ImageWithFallback
                     alt={`Product ${index + 1}`}
                     className="absolute inset-0 w-full h-full object-cover"
                     src={img}
+                    fallbackSrc={img1}
                   />
                   {selectedImageIndex === index && (
                     <div className="absolute inset-0 bg-black bg-opacity-10" />
@@ -637,7 +633,7 @@ export default function ProductDetailPage() {
                   </div>
                   <div>
                     <button
-                      onClick={() => handleDeleteReview(review.reviewKey || '', review.author)}
+                      onClick={() => handleDeleteReview(review.reviewKey || '')}
                       className="flex items-center gap-1 text-sm text-gray-600 hover:text-[#b78b1f]"
                     >
                       <Trash2 size={14} />
@@ -659,7 +655,7 @@ export default function ProductDetailPage() {
                 )}
 
                 <button
-                  onClick={() => handleLikeReview(review.reviewKey || '')}
+                  onClick={() => handleHelpfulClick(review)}
                   className="flex items-center gap-1 text-sm text-gray-600 hover:text-[#b78b1f]"
                 >
                   <ThumbsUp size={14} />

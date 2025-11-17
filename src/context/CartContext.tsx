@@ -11,24 +11,38 @@ interface CartContextType {
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
+// ✅ Edge Function 이름 설정
+// 실제 함수 slug는 'make-server-94a0507e'입니다
+// (Dashboard의 "Name"이 아닌 "Slug"가 실제 URL에 사용됨)
+const EDGE_FUNCTION_NAME = 'make-server-94a0507e'; // 👈 실제 함수 slug
+
 export function CartProvider({ children }: { children: ReactNode }) {
   const [cartCount, setCartCount] = useState(0);
   const supabase = createClient();
 
   const refreshCart = useCallback(async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError) {
+        console.error('Session error:', sessionError);
+        setCartCount(0);
+        return;
+      }
       
       if (!session) {
         setCartCount(0);
         return;
       }
 
+      console.log('🛒 Refreshing cart...');
+      
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/cart`,
+        `https://${projectId}.supabase.co/functions/v1/${EDGE_FUNCTION_NAME}/api/cart`,
         {
           headers: {
             'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
           }
         }
       );
@@ -37,11 +51,13 @@ export function CartProvider({ children }: { children: ReactNode }) {
         const data = await response.json();
         const totalCount = data.cart?.reduce((sum: number, item: any) => sum + item.quantity, 0) || 0;
         setCartCount(totalCount);
+        console.log('✅ Cart loaded, count:', totalCount);
       } else {
+        console.error('❌ Failed to load cart:', response.status, await response.text());
         setCartCount(0);
       }
     } catch (error) {
-      console.error('Failed to refresh cart:', error);
+      console.error('❌ Failed to refresh cart:', error);
       setCartCount(0);
     }
   }, [supabase]);
@@ -55,46 +71,65 @@ export function CartProvider({ children }: { children: ReactNode }) {
     quantity: number = 1
   ) => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError) {
+        console.error('Session error:', sessionError);
+        return;
+      }
       
       if (!session) {
         console.error('User not authenticated');
         return;
       }
 
+      console.log('🛒 Adding to cart...');
+
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/cart`,
+        `https://${projectId}.supabase.co/functions/v1/${EDGE_FUNCTION_NAME}/api/cart`,
         {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json',
             'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            productId,
-            name,
-            price,
-            originalPrice,
-            image,
-            quantity
+            cart: [
+              {
+                productId,
+                name,
+                price,
+                originalPrice,
+                image,
+                quantity
+              }
+            ]
           })
         }
       );
 
       if (response.ok) {
         await refreshCart();
+        console.log('✅ Added to cart successfully');
       } else {
-        console.error('Failed to add to cart:', await response.text());
+        console.error('❌ Failed to add to cart:', response.status, await response.text());
       }
     } catch (error) {
       console.error('Failed to add to cart:', error);
     }
   }, [supabase, refreshCart]);
 
-  // 초기 로드 시 장바구니 개수 설정
+  // 초기 로드 시 장바구니 개수 설정 - 사용자가 로그인한 경우에만
   useEffect(() => {
-    refreshCart();
-  }, [refreshCart]);
+    const initCart = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      // Only refresh cart if user is logged in
+      if (session) {
+        refreshCart();
+      }
+    };
+    initCart();
+  }, [refreshCart, supabase]);
 
   return (
     <CartContext.Provider value={{ cartCount, addToCart, refreshCart, setCartCount }}>

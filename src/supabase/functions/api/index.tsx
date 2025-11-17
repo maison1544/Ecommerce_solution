@@ -1,10 +1,12 @@
+// ✅ 'api' Edge Function 엔트리포인트
+// server/index.tsx를 import해서 사용
 import { Hono } from 'npm:hono@4.6.14';
 import { cors } from 'npm:hono/cors';
 import { logger } from 'npm:hono/logger';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
-import * as kv from './kv_store.tsx';
+import * as kv from '../server/kv_store.tsx';
 
-console.log('🔐 === Server v5.0 - SECURE VERSION (app_metadata.role only) ===');
+console.log('🔐 === API v5.0 - SECURE VERSION (app_metadata.role only) ===');
 
 const app = new Hono();
 
@@ -31,9 +33,9 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 const verifyJWT = async (c: any, next: any) => {
   // 공개 엔드포인트는 제외
   const publicPaths = [
-    '/make-server-94a0507e/api/auth/signup',
-    '/make-server-94a0507e/api/health',
-    '/make-server-94a0507e/api',
+    '/api/auth/signup',
+    '/api/health',
+    '/api',
   ];
   
   const path = c.req.path;
@@ -82,7 +84,7 @@ const verifyJWT = async (c: any, next: any) => {
 };
 
 // 모든 /api/* 경로에 JWT 검증 적용
-app.use('/make-server-94a0507e/api/*', verifyJWT);
+app.use('/api/*', verifyJWT);
 
 // 관리자 권한 확인 미들웨어
 const requireAdmin = async (c: any, next: any) => {
@@ -96,20 +98,10 @@ const requireAdmin = async (c: any, next: any) => {
   await next();
 };
 
-// Root route (for health check)
-app.get('/', (c) => {
-  return c.json({ 
-    message: 'Solution Studio E-Commerce API',
-    version: '5.0 - Secure',
-    status: 'running',
-    timestamp: new Date().toISOString()
-  });
-});
-
 // ==================== PUBLIC ROUTES ====================
 
 // Health check
-app.get('/make-server-94a0507e/api/health', (c) => {
+app.get('/api/health', (c) => {
   return c.json({ 
     status: 'ok', 
     version: '5.0 - Secure',
@@ -117,7 +109,7 @@ app.get('/make-server-94a0507e/api/health', (c) => {
   });
 });
 
-app.get('/make-server-94a0507e/api', (c) => {
+app.get('/api', (c) => {
   return c.json({ 
     message: 'Solution Studio E-Commerce API',
     version: '5.0 - Secure',
@@ -128,7 +120,7 @@ app.get('/make-server-94a0507e/api', (c) => {
 // ==================== AUTH ROUTES ====================
 
 // 회원가입 (공개 엔드포인트)
-app.post('/make-server-94a0507e/api/auth/signup', async (c) => {
+app.post('/api/auth/signup', async (c) => {
   try {
     const body = await c.req.json();
     const { email, password, name, phone, birthDate } = body;
@@ -173,21 +165,18 @@ app.post('/make-server-94a0507e/api/auth/signup', async (c) => {
 // ==================== PRODUCT ROUTES ====================
 
 // 상품 목록 조회 (인증 필요)
-app.get('/make-server-94a0507e/api/products', async (c) => {
+app.get('/api/products', async (c) => {
   try {
-    // 프론트엔드의 정적 상품 데이터를 사용하는 것이 권장되므로
-    // 이 엔드포인트는 빈 배열을 반환하거나 KV에서 추가 상품을 조회할 수 있습니다.
-    // 프론트엔드는 fallback으로 로컬 데이터를 사용합니다.
     const products = await kv.getByPrefix('product:');
-    return c.json({ products: products || [], message: 'Use local product data for better performance' });
+    return c.json({ products: products || [] });
   } catch (error) {
     console.error('❌ Get products error:', error);
-    return c.json({ error: 'Failed to get products', products: [] }, 500);
+    return c.json({ error: 'Failed to get products' }, 500);
   }
 });
 
 // 상품 상세 조회 (인증 필요)
-app.get('/make-server-94a0507e/api/products/:id', async (c) => {
+app.get('/api/products/:id', async (c) => {
   try {
     const id = c.req.param('id');
     const product = await kv.get(`product:${id}`);
@@ -204,7 +193,7 @@ app.get('/make-server-94a0507e/api/products/:id', async (c) => {
 });
 
 // 상품 생성 (관리자 전용)
-app.post('/make-server-94a0507e/api/products', requireAdmin, async (c) => {
+app.post('/api/products', requireAdmin, async (c) => {
   try {
     const body = await c.req.json();
     const productId = Date.now();
@@ -228,7 +217,7 @@ app.post('/make-server-94a0507e/api/products', requireAdmin, async (c) => {
 });
 
 // 상품 수정 (관리자 전용)
-app.put('/make-server-94a0507e/api/products/:id', requireAdmin, async (c) => {
+app.put('/api/products/:id', requireAdmin, async (c) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json();
@@ -252,7 +241,7 @@ app.put('/make-server-94a0507e/api/products/:id', requireAdmin, async (c) => {
 });
 
 // 상품 삭제 (관리자 전용)
-app.delete('/make-server-94a0507e/api/products/:id', requireAdmin, async (c) => {
+app.delete('/api/products/:id', requireAdmin, async (c) => {
   try {
     const id = c.req.param('id');
     const userId = c.get('userId');
@@ -270,7 +259,7 @@ app.delete('/make-server-94a0507e/api/products/:id', requireAdmin, async (c) => 
 // ==================== CART ROUTES ====================
 
 // 장바구니 조회 (자신의 장바구니만)
-app.get('/make-server-94a0507e/api/cart', async (c) => {
+app.get('/api/cart', async (c) => {
   try {
     const userId = c.get('userId');
     const cart = await kv.get(`cart:${userId}`);
@@ -282,7 +271,7 @@ app.get('/make-server-94a0507e/api/cart', async (c) => {
 });
 
 // 장바구니 저장 (자신의 장바구니만)
-app.post('/make-server-94a0507e/api/cart', async (c) => {
+app.post('/api/cart', async (c) => {
   try {
     const userId = c.get('userId');
     const body = await c.req.json();
@@ -297,60 +286,10 @@ app.post('/make-server-94a0507e/api/cart', async (c) => {
   }
 });
 
-// 장바구니 아이템 수량 변경
-app.put('/make-server-94a0507e/api/cart/:id', async (c) => {
-  try {
-    const userId = c.get('userId');
-    const itemId = parseInt(c.req.param('id'));
-    const { quantity } = await c.req.json();
-    
-    const cart = await kv.get(`cart:${userId}`) || [];
-    const updatedCart = cart.map((item: any) => 
-      item.id === itemId ? { ...item, quantity } : item
-    );
-    
-    await kv.set(`cart:${userId}`, updatedCart);
-    return c.json({ success: true, cart: updatedCart });
-  } catch (error) {
-    console.error('❌ Update cart item error:', error);
-    return c.json({ error: 'Failed to update cart item' }, 500);
-  }
-});
-
-// 장바구니 아이템 삭제
-app.delete('/make-server-94a0507e/api/cart/:id', async (c) => {
-  try {
-    const userId = c.get('userId');
-    const itemId = parseInt(c.req.param('id'));
-    
-    const cart = await kv.get(`cart:${userId}`) || [];
-    const updatedCart = cart.filter((item: any) => item.id !== itemId);
-    
-    await kv.set(`cart:${userId}`, updatedCart);
-    return c.json({ success: true, cart: updatedCart });
-  } catch (error) {
-    console.error('❌ Delete cart item error:', error);
-    return c.json({ error: 'Failed to delete cart item' }, 500);
-  }
-});
-
-// 장바구니 전체 비우기
-app.delete('/make-server-94a0507e/api/cart/clear', async (c) => {
-  try {
-    const userId = c.get('userId');
-    await kv.set(`cart:${userId}`, []);
-    console.log(`✅ Cart cleared for user: ${userId}`);
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('❌ Clear cart error:', error);
-    return c.json({ error: 'Failed to clear cart' }, 500);
-  }
-});
-
 // ==================== ORDER ROUTES ====================
 
 // 주문 조회 (자신의 주문만)
-app.get('/make-server-94a0507e/api/orders', async (c) => {
+app.get('/api/orders', async (c) => {
   try {
     const userId = c.get('userId');
     const orders = await kv.get(`orders:${userId}`);
@@ -362,18 +301,15 @@ app.get('/make-server-94a0507e/api/orders', async (c) => {
 });
 
 // 주문 생성 (자신의 주문만)
-app.post('/make-server-94a0507e/api/orders', async (c) => {
+app.post('/api/orders', async (c) => {
   try {
     const userId = c.get('userId');
     const body = await c.req.json();
     
     const existingOrders = await kv.get(`orders:${userId}`) || [];
     const order = {
-      id: Date.now(),
-      ...body,
+      ...body.order,
       userId,
-      status: 'pending',
-      date: new Date().toISOString(),
       createdAt: new Date().toISOString()
     };
     const updatedOrders = [...existingOrders, order];
@@ -388,38 +324,10 @@ app.post('/make-server-94a0507e/api/orders', async (c) => {
   }
 });
 
-// 주문 상태 변경 (관리자 전용)
-app.put('/make-server-94a0507e/api/orders/:orderId/status', requireAdmin, async (c) => {
-  try {
-    const orderId = parseInt(c.req.param('orderId'));
-    const { status } = await c.req.json();
-    const adminId = c.get('userId');
-    
-    // Find user's order
-    const allUsers = await supabase.auth.admin.listUsers();
-    for (const user of allUsers.data.users) {
-      const orders = await kv.get(`orders:${user.id}`) || [];
-      const orderIndex = orders.findIndex((o: any) => o.id === orderId);
-      
-      if (orderIndex !== -1) {
-        orders[orderIndex] = { ...orders[orderIndex], status };
-        await kv.set(`orders:${user.id}`, orders);
-        console.log(`✅ Order ${orderId} status updated to ${status} by ${adminId}`);
-        return c.json({ success: true });
-      }
-    }
-    
-    return c.json({ error: 'Order not found' }, 404);
-  } catch (error) {
-    console.error('❌ Update order status error:', error);
-    return c.json({ error: 'Failed to update order status' }, 500);
-  }
-});
-
 // ==================== ADDRESS ROUTES ====================
 
 // 배송지 조회 (자신의 배송지만)
-app.get('/make-server-94a0507e/api/addresses', async (c) => {
+app.get('/api/addresses', async (c) => {
   try {
     const userId = c.get('userId');
     const addresses = await kv.get(`addresses:${userId}`);
@@ -431,84 +339,25 @@ app.get('/make-server-94a0507e/api/addresses', async (c) => {
 });
 
 // 배송지 저장 (자신의 배송지만)
-app.post('/make-server-94a0507e/api/addresses', async (c) => {
+app.post('/api/addresses', async (c) => {
   try {
     const userId = c.get('userId');
     const body = await c.req.json();
     
-    const existingAddresses = await kv.get(`addresses:${userId}`) || [];
-    const newAddress = {
-      id: Date.now(),
-      userId,
-      ...body,
-      createdAt: new Date().toISOString()
-    };
+    await kv.set(`addresses:${userId}`, body.addresses);
     
-    // If this is default, unset other defaults
-    let updatedAddresses = [...existingAddresses];
-    if (body.isDefault) {
-      updatedAddresses = updatedAddresses.map((addr: any) => ({ ...addr, isDefault: false }));
-    }
-    updatedAddresses.push(newAddress);
-    
-    await kv.set(`addresses:${userId}`, updatedAddresses);
-    
-    console.log(`✅ Address created for user: ${userId}`);
-    return c.json({ success: true, address: newAddress, addresses: updatedAddresses });
+    console.log(`✅ Addresses saved for user: ${userId}`);
+    return c.json({ success: true });
   } catch (error) {
-    console.error('❌ Save address error:', error);
-    return c.json({ error: 'Failed to save address' }, 500);
-  }
-});
-
-// 배송지 수정 (자신의 배송지만)
-app.put('/make-server-94a0507e/api/addresses/:id', async (c) => {
-  try {
-    const userId = c.get('userId');
-    const addressId = parseInt(c.req.param('id'));
-    const body = await c.req.json();
-    
-    const addresses = await kv.get(`addresses:${userId}`) || [];
-    let updatedAddresses = addresses.map((addr: any) => {
-      if (addr.id === addressId) {
-        return { ...addr, ...body, updatedAt: new Date().toISOString() };
-      }
-      // If new default, unset others
-      if (body.isDefault && addr.isDefault) {
-        return { ...addr, isDefault: false };
-      }
-      return addr;
-    });
-    
-    await kv.set(`addresses:${userId}`, updatedAddresses);
-    return c.json({ success: true, addresses: updatedAddresses });
-  } catch (error) {
-    console.error('❌ Update address error:', error);
-    return c.json({ error: 'Failed to update address' }, 500);
-  }
-});
-
-// 배송지 삭제 (자신의 배송지만)
-app.delete('/make-server-94a0507e/api/addresses/:id', async (c) => {
-  try {
-    const userId = c.get('userId');
-    const addressId = parseInt(c.req.param('id'));
-    
-    const addresses = await kv.get(`addresses:${userId}`) || [];
-    const updatedAddresses = addresses.filter((addr: any) => addr.id !== addressId);
-    
-    await kv.set(`addresses:${userId}`, updatedAddresses);
-    return c.json({ success: true, addresses: updatedAddresses });
-  } catch (error) {
-    console.error('❌ Delete address error:', error);
-    return c.json({ error: 'Failed to delete address' }, 500);
+    console.error('❌ Save addresses error:', error);
+    return c.json({ error: 'Failed to save addresses' }, 500);
   }
 });
 
 // ==================== INQUIRY ROUTES ====================
 
 // 문의사항 조회 (자신의 문의만)
-app.get('/make-server-94a0507e/api/inquiries', async (c) => {
+app.get('/api/inquiries', async (c) => {
   try {
     const userId = c.get('userId');
     const role = c.get('userRole');
@@ -519,29 +368,17 @@ app.get('/make-server-94a0507e/api/inquiries', async (c) => {
       return c.json({ inquiries: inquiries || [] });
     }
     
-    // 일반 사자는 자신의 문의만
-    const inquiries = await kv.get(`inquiries:${userId}`) || [];
-    return c.json({ inquiries });
+    // 일반 사용자는 자신의 문의만
+    const inquiries = await kv.get(`inquiries:${userId}`);
+    return c.json({ inquiries: inquiries || [] });
   } catch (error) {
     console.error('❌ Get inquiries error:', error);
     return c.json({ error: 'Failed to get inquiries' }, 500);
   }
 });
 
-// 내 문의사항 조회 (별도 엔드포인트)
-app.get('/make-server-94a0507e/api/inquiries/my', async (c) => {
-  try {
-    const userId = c.get('userId');
-    const inquiries = await kv.get(`inquiries:${userId}`) || [];
-    return c.json({ inquiries });
-  } catch (error) {
-    console.error('❌ Get my inquiries error:', error);
-    return c.json({ error: 'Failed to get inquiries' }, 500);
-  }
-});
-
 // 문의사항 저장 (자신의 문의만)
-app.post('/make-server-94a0507e/api/inquiries', async (c) => {
+app.post('/api/inquiries', async (c) => {
   try {
     const userId = c.get('userId');
     const body = await c.req.json();
@@ -567,7 +404,7 @@ app.post('/make-server-94a0507e/api/inquiries', async (c) => {
 });
 
 // 문의 답변 (관리자 전용)
-app.put('/make-server-94a0507e/api/inquiries/:inquiryId/answer', requireAdmin, async (c) => {
+app.put('/api/inquiries/:inquiryId/answer', requireAdmin, async (c) => {
   try {
     const inquiryId = c.req.param('inquiryId');
     const body = await c.req.json();
@@ -605,7 +442,7 @@ app.put('/make-server-94a0507e/api/inquiries/:inquiryId/answer', requireAdmin, a
 // ==================== REVIEW ROUTES ====================
 
 // 리뷰 조회 (인증 필요)
-app.get('/make-server-94a0507e/api/reviews/:productId', async (c) => {
+app.get('/api/reviews/:productId', async (c) => {
   try {
     const productId = c.req.param('productId');
     const reviews = await kv.get(`reviews:${productId}`);
@@ -617,7 +454,7 @@ app.get('/make-server-94a0507e/api/reviews/:productId', async (c) => {
 });
 
 // 리뷰 저장 (자신의 리뷰만)
-app.post('/make-server-94a0507e/api/reviews/:productId', async (c) => {
+app.post('/api/reviews/:productId', async (c) => {
   try {
     const productId = c.req.param('productId');
     const userId = c.get('userId');
@@ -642,109 +479,10 @@ app.post('/make-server-94a0507e/api/reviews/:productId', async (c) => {
   }
 });
 
-// 리뷰 저장 (대체 엔드포인트)
-app.post('/make-server-94a0507e/api/save-review', async (c) => {
-  try {
-    const userId = c.get('userId');
-    const body = await c.req.json();
-    const { review } = body;
-    
-    if (!review || !review.productId) {
-      return c.json({ error: 'Invalid review data' }, 400);
-    }
-    
-    const reviewWithMeta = {
-      ...review,
-      userId,
-      createdAt: new Date().toISOString()
-    };
-    
-    const existingReviews = await kv.get(`reviews:${review.productId}`) || [];
-    const updatedReviews = [...existingReviews, reviewWithMeta];
-    
-    await kv.set(`reviews:${review.productId}`, updatedReviews);
-    await kv.set(`review:${review.id}`, reviewWithMeta);
-    
-    console.log(`✅ Review saved for product ${review.productId} by ${userId}`);
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('❌ Save review error:', error);
-    return c.json({ error: 'Failed to save review' }, 500);
-  }
-});
-
-// 리뷰 도움돼요 표시
-app.post('/make-server-94a0507e/api/reviews/:reviewId/helpful', async (c) => {
-  try {
-    const reviewId = c.req.param('reviewId');
-    const userId = c.get('userId');
-    const { helpful } = await c.req.json();
-    
-    const review = await kv.get(`review:${reviewId}`);
-    if (!review) {
-      return c.json({ error: 'Review not found' }, 404);
-    }
-    
-    // Update helpful users list
-    const helpfulUsers = review.helpfulUsers || [];
-    const updatedHelpfulUsers = helpful 
-      ? [...helpfulUsers, userId]
-      : helpfulUsers.filter((id: string) => id !== userId);
-    
-    const updatedReview = { ...review, helpfulUsers: updatedHelpfulUsers };
-    await kv.set(`review:${reviewId}`, updatedReview);
-    
-    // Update in product reviews list
-    const productReviews = await kv.get(`reviews:${review.productId}`) || [];
-    const updatedProductReviews = productReviews.map((r: any) => 
-      r.id === parseInt(reviewId) ? updatedReview : r
-    );
-    await kv.set(`reviews:${review.productId}`, updatedProductReviews);
-    
-    console.log(`✅ Review ${reviewId} helpful marked by ${userId}`);
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('❌ Mark helpful error:', error);
-    return c.json({ error: 'Failed to mark as helpful' }, 500);
-  }
-});
-
-// 리뷰 삭제
-app.delete('/make-server-94a0507e/api/reviews/:reviewKey', async (c) => {
-  try {
-    const reviewKey = c.req.param('reviewKey');
-    const userId = c.get('userId');
-    
-    const review = await kv.get(`review:${reviewKey}`);
-    if (!review) {
-      return c.json({ error: 'Review not found' }, 404);
-    }
-    
-    // Only owner can delete
-    if (review.userId !== userId) {
-      return c.json({ error: 'Unauthorized' }, 403);
-    }
-    
-    // Delete from review store
-    await kv.del(`review:${reviewKey}`);
-    
-    // Delete from product reviews list
-    const productReviews = await kv.get(`reviews:${review.productId}`) || [];
-    const updatedProductReviews = productReviews.filter((r: any) => r.id !== parseInt(reviewKey));
-    await kv.set(`reviews:${review.productId}`, updatedProductReviews);
-    
-    console.log(`✅ Review ${reviewKey} deleted by ${userId}`);
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('❌ Delete review error:', error);
-    return c.json({ error: 'Failed to delete review' }, 500);
-  }
-});
-
 // ==================== ADMIN ROUTES ====================
 
 // 사용자 목록 조회 (관리자 전용)
-app.get('/make-server-94a0507e/api/admin/users', requireAdmin, async (c) => {
+app.get('/api/admin/users', requireAdmin, async (c) => {
   try {
     const { data: { users }, error } = await supabase.auth.admin.listUsers();
     
@@ -775,7 +513,7 @@ app.get('/make-server-94a0507e/api/admin/users', requireAdmin, async (c) => {
 });
 
 // 관리자 목록 조회 (관리자 전용)
-app.get('/make-server-94a0507e/api/admin/admins', requireAdmin, async (c) => {
+app.get('/api/admin/admins', requireAdmin, async (c) => {
   try {
     const { data: { users }, error } = await supabase.auth.admin.listUsers();
     
@@ -804,7 +542,7 @@ app.get('/make-server-94a0507e/api/admin/admins', requireAdmin, async (c) => {
 });
 
 // 사용자 차단/해제 (관리자 전용)
-app.put('/make-server-94a0507e/api/admin/users/:userId/block', requireAdmin, async (c) => {
+app.put('/api/admin/users/:userId/block', requireAdmin, async (c) => {
   try {
     const userId = c.req.param('userId');
     const body = await c.req.json();
@@ -845,139 +583,10 @@ app.put('/make-server-94a0507e/api/admin/users/:userId/block', requireAdmin, asy
   }
 });
 
-// 관리자 차단/해제 (POST 방식 - 관리자 전용)
-app.post('/make-server-94a0507e/api/admin/users/:userId/block', requireAdmin, async (c) => {
-  try {
-    const userId = c.req.param('userId');
-    const body = await c.req.json();
-    const adminId = c.get('userId');
-    
-    const isBlocked = body.isBlocked ?? body.block ?? false;
-    
-    const bannedUntil = isBlocked 
-      ? new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000).toISOString()
-      : 'none';
-    
-    const { error } = await supabase.auth.admin.updateUserById(userId, {
-      ban_duration: bannedUntil,
-    });
-    
-    if (error) {
-      return c.json({ error: error.message }, 500);
-    }
-    
-    console.log(`✅ User ${isBlocked ? 'blocked' : 'unblocked'}: ${userId} by ${adminId}`);
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('❌ Block user error:', error);
-    return c.json({ error: 'Failed to block user' }, 500);
-  }
-});
-
-// 관리자 차단/해제 (관리자 페이지 - 관리자 전용)
-app.post('/make-server-94a0507e/api/admin/admins/:userId/block', requireAdmin, async (c) => {
-  try {
-    const userId = c.req.param('userId');
-    const body = await c.req.json();
-    const adminId = c.get('userId');
-    
-    const isBlocked = body.block ?? false;
-    
-    const bannedUntil = isBlocked 
-      ? new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000).toISOString()
-      : 'none';
-    
-    const { error } = await supabase.auth.admin.updateUserById(userId, {
-      ban_duration: bannedUntil,
-    });
-    
-    if (error) {
-      return c.json({ error: error.message }, 500);
-    }
-    
-    console.log(`✅ Admin ${isBlocked ? 'blocked' : 'unblocked'}: ${userId} by ${adminId}`);
-    return c.json({ success: true });
-  } catch (error) {
-    console.error('❌ Block admin error:', error);
-    return c.json({ error: 'Failed to block admin' }, 500);
-  }
-});
-
-// 관리자 생성 (관리자 전용)
-app.post('/make-server-94a0507e/api/create-admin', requireAdmin, async (c) => {
-  try {
-    const body = await c.req.json();
-    const { email, password, name } = body;
-    const currentAdminId = c.get('userId');
-    
-    if (!email || !password || !name) {
-      return c.json({ error: '필수 정보를 입력해주세요.' }, 400);
-    }
-    
-    const { data, error } = await supabase.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-      user_metadata: { name },
-      app_metadata: { role: 'admin' },
-    });
-    
-    if (error) {
-      console.error('❌ Create admin error:', error);
-      return c.json({ error: error.message }, 400);
-    }
-    
-    console.log(`✅ Admin created: ${data.user.email} by ${currentAdminId}`);
-    return c.json({ success: true, user: { id: data.user.id, email: data.user.email } });
-  } catch (error) {
-    console.error('❌ Create admin error:', error);
-    return c.json({ error: 'Failed to create admin' }, 500);
-  }
-});
-
-// 관리자용 문의사항 조회 (관리자 전용)
-app.get('/make-server-94a0507e/api/admin/inquiries', requireAdmin, async (c) => {
-  try {
-    const inquiries = await kv.getByPrefix('inquiry:');
-    return c.json({ inquiries: inquiries || [] });
-  } catch (error) {
-    console.error('❌ Get admin inquiries error:', error);
-    return c.json({ error: 'Failed to get inquiries' }, 500);
-  }
-});
-
-// 관리자용 주문 조회 (관리자 전용)
-app.get('/make-server-94a0507e/api/admin/orders', requireAdmin, async (c) => {
-  try {
-    // Get all users and collect their orders
-    const allUsers = await supabase.auth.admin.listUsers();
-    const allOrders = [];
-    
-    for (const user of allUsers.data.users) {
-      const orders = await kv.get(`orders:${user.id}`) || [];
-      for (const order of orders) {
-        allOrders.push({
-          ...order,
-          userEmail: user.email,
-          userName: user.user_metadata?.name || '',
-        });
-      }
-    }
-    
-    // Sort by date descending
-    allOrders.sort((a, b) => new Date(b.date || b.createdAt).getTime() - new Date(a.date || a.createdAt).getTime());
-    
-    return c.json({ orders: allOrders });
-  } catch (error) {
-    console.error('❌ Get admin orders error:', error);
-    return c.json({ error: 'Failed to get orders' }, 500);
-  }
-});
-
 // ==================== IMAGE UPLOAD ====================
 
 // Supabase Storage에 이미지 업로드 (관리자 전용)
-app.post('/make-server-94a0507e/api/upload', requireAdmin, async (c) => {
+app.post('/api/upload', requireAdmin, async (c) => {
   try {
     const userId = c.get('userId');
     
@@ -1025,26 +634,6 @@ app.post('/make-server-94a0507e/api/upload', requireAdmin, async (c) => {
   }
 });
 
-console.log('✅ Server configured with JWT verification and security policies');
-
-// 404 catch-all handler for debugging
-app.all('*', (c) => {
-  const path = c.req.path;
-  const method = c.req.method;
-  console.log(`❌ 404 - ${method} ${path}`);
-  return c.json({ 
-    error: 'Not Found', 
-    path,
-    method,
-    message: `Endpoint ${method} ${path} does not exist`,
-    availableEndpoints: [
-      'GET /make-server-94a0507e/api/health',
-      'POST /make-server-94a0507e/api/auth/signup',
-      'GET /make-server-94a0507e/api/products',
-      'GET /make-server-94a0507e/api/cart',
-      // ... etc
-    ]
-  }, 404);
-});
+console.log('✅ API configured with JWT verification and security policies');
 
 Deno.serve(app.fetch);

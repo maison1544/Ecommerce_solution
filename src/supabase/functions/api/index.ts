@@ -1,1482 +1,890 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
-import * as kv from "./kv_store.tsx";
 
-console.log("=== API Server starting ===");
+const VERSION = "2.0.0";
 
-// CORS headers
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+// ✅ CORS 제한: 프로덕션 배포 시 실제 도메인으로 변경 필요!
+// 개발: "*" / 프로덕션: "https://yourdomain.com"
+const ALLOWED_ORIGINS = Deno.env.get("ALLOWED_ORIGINS") || "*";
+
+const cors = {
+  "Access-Control-Allow-Origin": ALLOWED_ORIGINS,
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS"
 };
 
-// Initialize Supabase Storage bucket
-async function initializeStorage() {
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL") ?? "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-  );
+const supabase = () => createClient(
+  Deno.env.get("SUPABASE_URL") ?? "",
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+);
 
-  const bucketName = "prod-ecommerce";
+// ========== KV Store Helpers ==========
+const kvGet = async (k: string) => {
+  const { data } = await supabase().from("kv_store_94a0507e").select("value").eq("key", k).maybeSingle();
+  return data?.value;
+};
 
-  try {
-    const { data: buckets } = await supabase.storage.listBuckets();
-    const bucketExists = buckets?.some((bucket) => bucket.name === bucketName);
+const kvSet = async (k: string, v: any) => {
+  await supabase().from("kv_store_94a0507e").upsert({ key: k, value: v });
+};
 
-    if (!bucketExists) {
-      await supabase.storage.createBucket(bucketName, {
-        public: true,
-        fileSizeLimit: 5242880, // 5MB
-        allowedMimeTypes: ["image/png", "image/jpeg", "image/jpg", "image/webp"],
-      });
-      console.log(`Storage bucket '${bucketName}' created`);
-    }
-  } catch (error) {
-    console.error("Error initializing storage:", error);
+const kvDel = async (k: string) => {
+  await supabase().from("kv_store_94a0507e").delete().eq("key", k);
+};
+
+const kvGetByPrefix = async (prefix: string) => {
+  const { data } = await supabase().from("kv_store_94a0507e").select("*").like("key", `${prefix}%`);
+  return data || [];
+};
+
+// ========== Rate Limiting ==========
+// ✅ 회원가입 Rate Limit: IP 기준 1분 3회, 1시간 20회
+async function checkSignupRateLimit(ip: string): Promise<{ allowed: boolean; error?: string; retryAfter?: number }> {
+  const now = Date.now();
+  const minuteAgo = now - 60 * 1000;
+  const hourAgo = now - 60 * 60 * 1000;
+  
+  // KV Store에서 현재 IP의 회원가입 이력 조회
+  const signupHistory = await kvGet(`signup_rate_${ip}`) || [];
+  
+  // 1분 이내 시도 횟수
+  const recentMinute = signupHistory.filter((timestamp: number) => timestamp > minuteAgo);
+  if (recentMinute.length >= 3) {
+    return { allowed: false, error: "너무 많은 요청입니다. 1분 후 다시 시도해주세요.", retryAfter: 60 };
   }
+  
+  // 1시간 이내 시도 횟수
+  const recentHour = signupHistory.filter((timestamp: number) => timestamp > hourAgo);
+  if (recentHour.length >= 20) {
+    return { allowed: false, error: "너무 많은 요청입니다. 1시간 후 다시 시도해주세요.", retryAfter: 3600 };
+  }
+  
+  // 현재 시도 추가
+  const updatedHistory = [...recentHour, now];
+  await kvSet(`signup_rate_${ip}`, updatedHistory);
+  
+  return { allowed: true };
 }
 
-// Auth helpers
-async function verifyAuth(authHeader: string | null) {
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return { user: null, error: "No token provided" };
+// ✅ 로그인 Rate Limit: IP 기준 1분 5회, 1시간 50회
+async function checkLoginRateLimit(ip: string): Promise<{ allowed: boolean; error?: string; retryAfter?: number }> {
+  const now = Date.now();
+  const minuteAgo = now - 60 * 1000;
+  const hourAgo = now - 60 * 60 * 1000;
+  
+  const loginHistory = await kvGet(`login_rate_${ip}`) || [];
+  
+  // 1분 이내 5회 초과 시 차단
+  const recentMinute = loginHistory.filter((timestamp: number) => timestamp > minuteAgo);
+  if (recentMinute.length >= 5) {
+    return { allowed: false, error: "너무 많은 로그인 시도입니다. 1분 후 다시 시도해주세요.", retryAfter: 60 };
   }
-
-  const token = authHeader.split(" ")[1];
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL") ?? "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-  );
-
-  const { data: { user }, error } = await supabase.auth.getUser(token);
-
-  if (error || !user) {
-    return { user: null, error: "Invalid token" };
+  
+  // 1시간 이내 50회 초과 시 차단
+  const recentHour = loginHistory.filter((timestamp: number) => timestamp > hourAgo);
+  if (recentHour.length >= 50) {
+    return { allowed: false, error: "너무 많은 로그인 시도입니다. 1시간 후 다시 시도해주세요.", retryAfter: 3600 };
   }
+  
+  await kvSet(`login_rate_${ip}`, [...recentHour, now]);
+  return { allowed: true };
+}
 
+// ✅ 범용 Rate Limit 함수 (Retry-After 포함)
+async function checkRateLimit(
+  key: string, 
+  minuteLimit: number, 
+  hourLimit: number
+): Promise<{ allowed: boolean; error?: string; retryAfter?: number }> {
+  const now = Date.now();
+  const minuteAgo = now - 60 * 1000;
+  const hourAgo = now - 60 * 60 * 1000;
+  
+  const history = await kvGet(`rate_${key}`) || [];
+  
+  // 1분 이내 시도 횟수
+  const recentMinute = history.filter((timestamp: number) => timestamp > minuteAgo);
+  if (recentMinute.length >= minuteLimit) {
+    return { allowed: false, error: "너무 많은 요청입니다. 잠시 후 다시 시도해주세요.", retryAfter: 60 };
+  }
+  
+  // 1시간 이내 시도 횟수
+  const recentHour = history.filter((timestamp: number) => timestamp > hourAgo);
+  if (recentHour.length >= hourLimit) {
+    return { allowed: false, error: "너무 많은 요청입니다. 나중에 다시 시도해주세요.", retryAfter: 3600 };
+  }
+  
+  // 현재 시도 추가
+  const updatedHistory = [...recentHour, now];
+  await kvSet(`rate_${key}`, updatedHistory);
+  
+  return { allowed: true };
+}
+
+// ✅ 이중 Rate Limit: User ID + IP
+async function checkDualRateLimit(
+  userId: string,
+  ip: string,
+  prefix: string,
+  minuteLimit: number,
+  hourLimit: number
+): Promise<{ allowed: boolean; error?: string; retryAfter?: number }> {
+  // 첫 번째 방어: User ID 기준
+  const userResult = await checkRateLimit(`${prefix}_user_${userId}`, minuteLimit, hourLimit);
+  if (!userResult.allowed) {
+    return userResult;
+  }
+  
+  // 두 번째 방어: IP 기준
+  const ipResult = await checkRateLimit(`${prefix}_ip_${ip}`, minuteLimit * 2, hourLimit * 2);
+  if (!ipResult.allowed) {
+    return ipResult;
+  }
+  
+  return { allowed: true };
+}
+
+// ✅ IP 추출 헬퍼
+function getClientIP(req: Request): string {
+  const forwarded = req.headers.get("X-Forwarded-For");
+  const realIp = req.headers.get("X-Real-IP");
+  
+  let clientIP = "unknown";
+  
+  if (forwarded) {
+    clientIP = forwarded.split(',')[0].trim();
+  } else if (realIp) {
+    clientIP = realIp;
+  }
+  
+  // 🔍 배포 후 확인용 로그 (프로덕션에서 IP 전달 확인)
+  console.log(`[IP CHECK] X-Forwarded-For: ${forwarded || "없음"} | X-Real-IP: ${realIp || "없음"} | 추출된 IP: ${clientIP}`);
+  
+  return clientIP;
+}
+
+// ========== Auth Helpers ==========
+async function auth(h: string | null) {
+  if (!h?.startsWith("Bearer ")) return { user: null, error: "No token" };
+  const t = h.split(" ")[1];
+  const { data: { user }, error } = await supabase().auth.getUser(t);
+  if (error || !user) return { user: null, error: "Invalid" };
+  const b = await kvGet(`blocked_user_${user.id}`);
+  if (b?.isBlocked) return { user: null, error: "Blocked" };
   return { user, error: null };
 }
 
-async function verifyAdmin(authHeader: string | null) {
-  const { user, error } = await verifyAuth(authHeader);
-
-  if (error || !user) {
-    return { user: null, error: error || "Unauthorized" };
-  }
-
-  if (user.user_metadata?.role !== "admin") {
-    return { user: null, error: "Admin access required" };
-  }
-
+async function admin(h: string | null) {
+  const { user, error } = await auth(h);
+  if (error || !user) return { user: null, error: error || "Unauthorized" };
+  
+  // 관리자 차단 확인
+  const adminBlocked = await kvGet(`blocked_admin_${user.id}`);
+  if (adminBlocked?.isBlocked) return { user: null, error: "Admin blocked" };
+  
+  // ✅ app_metadata.role에서 확인 (클라이언트 수정 불가능)
+  if (user.app_metadata?.role !== "admin") return { user: null, error: "Admin required" };
   return { user, error: null };
 }
 
-// Initialize storage on startup
-initializeStorage();
+// ========== 유틸리티 함수 ==========
+function generateId(): string {
+  return `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
-  }
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
 
   try {
     const url = new URL(req.url);
-    const rawPath = url.pathname;
-    const method = req.method;
-    
-    // Supabase Edge Function URL 구조:
-    // - 클라이언트 요청: /functions/v1/api/xxx
-    // - pathname 가능성 1: /api/xxx (함수명 제거 안 됨)
-    // - pathname 가능성 2: /xxx (함수명 제거됨)
-    // 두 경우 모두 지원
-    const path = rawPath.startsWith("/api/") ? rawPath : `/api${rawPath}`;
+    const p = url.pathname.startsWith("/api/") ? url.pathname : `/api${url.pathname}`;
+    const m = req.method;
 
-    console.log("=== Request:", method, "raw:", rawPath, "normalized:", path, "===");
-    console.log("Full URL:", req.url);
-
-    // ========== ROUTES ==========
-
-    // Health check
-    if (path === "/api/health" && method === "GET") {
-      return new Response(
-        JSON.stringify({ status: "ok" }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // ==================== HEALTH CHECK ====================
+    if (p === "/api/health" && m === "GET") {
+      return new Response(JSON.stringify({ status: "ok", version: VERSION }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
     }
 
-    // Upload image (admin only)
-    if (path === "/api/upload-image" && method === "POST") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
+    // ==================== AUTH: 회원가입 ====================
+    if (p === "/api/auth/signup" && m === "POST") {
+      const ip = getClientIP(req);
+      const rateLimitResult = await checkSignupRateLimit(ip);
+      if (!rateLimitResult.allowed) {
         return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          JSON.stringify({ error: rateLimitResult.error }),
+          { 
+            status: 429, 
+            headers: { 
+              ...cors, 
+              "Content-Type": "application/json",
+              "Retry-After": rateLimitResult.retryAfter?.toString() || "60"
+            } 
+          }
         );
       }
 
-      const formData = await req.formData();
-      const file = formData.get("file") as File;
+      const body = await req.json();
+      const { email, password, name, phone, birthDate } = body;
 
-      if (!file) {
-        return new Response(
-          JSON.stringify({ error: "No file provided" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+      // Phone을 E.164 포맷으로 변환 (한국: 010-1234-5678 → +821012345678)
+      let formattedPhone = phone;
+      if (phone && phone.startsWith("010")) {
+        formattedPhone = "+82" + phone.substring(1).replace(/-/g, "");
       }
 
-      if (!file.type.startsWith("image/")) {
-        return new Response(
-          JSON.stringify({ error: "File must be an image" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      if (file.size > 5 * 1024 * 1024) {
-        return new Response(
-          JSON.stringify({ error: "File size must be less than 5MB" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      const bucketName = "prod-ecommerce";
-      const timestamp = Date.now();
-      const randomStr = Math.random().toString(36).substring(2, 15);
-      const ext = file.name.split(".").pop();
-      const filename = `${timestamp}-${randomStr}.${ext}`;
-
-      const arrayBuffer = await file.arrayBuffer();
-      const uint8Array = new Uint8Array(arrayBuffer);
-
-      const { data, error: uploadError } = await supabase.storage
-        .from(bucketName)
-        .upload(filename, uint8Array, {
-          contentType: file.type,
-          upsert: false,
-        });
-
-      if (uploadError) {
-        console.error("Upload error:", uploadError);
-        return new Response(
-          JSON.stringify({ error: `Upload failed: ${uploadError.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const { data: { publicUrl } } = supabase.storage.from(bucketName).getPublicUrl(filename);
-
-      return new Response(
-        JSON.stringify({ url: publicUrl }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Delete image (admin only)
-    if (path === "/api/delete-image" && method === "DELETE") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const { url: imageUrl } = await req.json();
-
-      if (!imageUrl) {
-        return new Response(
-          JSON.stringify({ error: "Image URL is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      const urlParts = imageUrl.split("/");
-      const fileName = urlParts[urlParts.length - 1];
-      const bucketName = "prod-ecommerce";
-
-      const { error: deleteError } = await supabase.storage
-        .from(bucketName)
-        .remove([fileName]);
-
-      if (deleteError) {
-        console.error("Delete error:", deleteError);
-        return new Response(
-          JSON.stringify({ error: `Failed to delete image: ${deleteError.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      console.log("Image deleted successfully:", fileName);
-      return new Response(
-        JSON.stringify({ success: true }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Create admin (admin only)
-    if (path === "/api/create-admin" && method === "POST") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const { email, password, name } = await req.json();
-
-      if (!email || !password || !name) {
-        return new Response(
-          JSON.stringify({ error: "Email, password, and name are required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        return new Response(
-          JSON.stringify({ error: "Invalid email format" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      if (password.length < 8) {
-        return new Response(
-          JSON.stringify({ error: "Password must be at least 8 characters" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      // ✅ role은 app_metadata에 저장 (클라이언트 수정 불가능)
+      const { data, error } = await supabase().auth.admin.createUser({
         email,
         password,
-        email_confirm: true,
-        user_metadata: {
+        phone: formattedPhone,
+        user_metadata: { 
           name,
-          role: "admin",
-          createdAt: new Date().toISOString().split("T")[0],
+          phone,
+          birthDate: birthDate || null,
+          // ❌ role을 user_metadata에 저장하지 않음
         },
+        app_metadata: {
+          role: "customer" // ✅ app_metadata에 저장 (보안)
+        },
+        email_confirm: true,
+        phone_confirm: true
       });
 
-      if (authError) {
-        console.error("Admin creation error:", authError);
+      if (error) {
         return new Response(
-          JSON.stringify({ error: `Failed to create admin: ${authError.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          JSON.stringify({ error: error.message }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
         );
       }
 
-      console.log("Admin created successfully:", { email, name });
-
       return new Response(
-        JSON.stringify({
-          success: true,
-          admin: {
-            id: authData.user.id,
-            email: authData.user.email,
-            name: authData.user.user_metadata.name,
-            role: "admin",
-          },
-        }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, user: data.user }),
+        { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Save review (authenticated users only)
-    if (path === "/api/save-review" && method === "POST") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+    // ==================== AUTH: 차단 확인 ====================
+    if (p === "/api/auth/check-blocked" && m === "POST") {
+      const h = req.headers.get("Authorization");
+      if (!h?.startsWith("Bearer ")) return new Response(JSON.stringify({ error: "No token" }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+      const t = h.split(" ")[1];
+      const { data: { user }, error } = await supabase().auth.getUser(t);
+      if (error || !user) return new Response(JSON.stringify({ error: "Invalid" }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+      const b = await kvGet(`blocked_user_${user.id}`);
+      return new Response(JSON.stringify({ isBlocked: b?.isBlocked || false }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
 
-      const { productId, author, rating, content } = await req.json();
+    // ==================== PRODUCTS: 전체 상품 조회 ====================
+    if (p === "/api/products" && m === "GET") {
+      const products = await kvGet("products_list") || [];
+      return new Response(JSON.stringify({ products }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
 
-      if (!productId || !author || !rating || !content) {
-        return new Response(
-          JSON.stringify({ error: "Missing required fields" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+    // ==================== PRODUCTS: 상품 추가 (관리자) ====================
+    if (p === "/api/products" && m === "POST") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
 
-      const reviewData = {
-        product_id: productId,
-        author,
-        rating,
-        content: content.trim(),
-        likes: 0,
-        images: [],
-        date: new Date().toISOString().split("T")[0],
+      const body = await req.json();
+      const products = await kvGet("products_list") || [];
+      
+      const newProduct = {
+        ...body,
+        id: parseInt(generateId().replace(/_/g, "")),
+        createdAt: new Date().toISOString()
       };
 
-      await kv.set(`review_${Date.now()}_${productId}`, reviewData);
+      products.push(newProduct);
+      await kvSet("products_list", products);
 
-      console.log("Review saved successfully:", reviewData);
       return new Response(
-        JSON.stringify({ success: true, review: reviewData }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, product: newProduct }),
+        { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Get reviews by product ID
-    if (path.startsWith("/api/reviews/") && method === "GET") {
-      const productId = path.split("/").pop();
+    // ==================== PRODUCTS: 상품 수정 (관리자) ====================
+    if (p.match(/^\/api\/products\/\d+$/) && m === "PUT") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
 
-      if (!productId) {
-        return new Response(
-          JSON.stringify({ error: "Product ID is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+      const productId = parseInt(p.split("/").pop()!);
+      const body = await req.json();
+      const products = await kvGet("products_list") || [];
+      
+      const index = products.findIndex((p: any) => p.id === productId);
+      if (index === -1) {
+        return new Response(JSON.stringify({ error: "Product not found" }), { status: 404, headers: { ...cors, "Content-Type": "application/json" } });
       }
 
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-      const { data, error } = await supabase
-        .from("kv_store_94a0507e")
-        .select("key, value")
-        .like("key", "review_%");
+      products[index] = { ...products[index], ...body, updatedAt: new Date().toISOString() };
+      await kvSet("products_list", products);
 
-      if (error) {
-        console.error("Error fetching reviews:", error);
-        return new Response(
-          JSON.stringify({ error: "Failed to fetch reviews" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const productReviews = data
-        ?.filter((item: any) => item.value.product_id === Number(productId))
-        .map((item: any) => {
-          const reviewKey = item.key.replace("review_", "");
-          return {
-            ...item.value,
-            reviewKey: reviewKey || `${Date.now()}_${item.value.product_id}`
-          };
-        }) || [];
-
-      productReviews.sort((a: any, b: any) => {
-        return new Date(b.date).getTime() - new Date(a.date).getTime();
-      });
-
-      console.log(`Retrieved ${productReviews.length} reviews for product ${productId}`);
       return new Response(
-        JSON.stringify({ reviews: productReviews }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, product: products[index] }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Like review
-    if (path.startsWith("/api/reviews/") && path.endsWith("/like") && method === "POST") {
-      const reviewKey = path.split("/")[3]; // /api/reviews/{key}/like
+    // ==================== PRODUCTS: 상품 삭제 (관리자) ====================
+    if (p.match(/^\/api\/products\/\d+$/) && m === "DELETE") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
 
-      if (!reviewKey) {
-        return new Response(
-          JSON.stringify({ error: "Review key is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+      const productId = parseInt(p.split("/").pop()!);
+      const products = await kvGet("products_list") || [];
+      
+      const filteredProducts = products.filter((p: any) => p.id !== productId);
+      await kvSet("products_list", filteredProducts);
 
-      const fullKey = `review_${reviewKey}`;
-      const review = await kv.get(fullKey);
-
-      if (!review) {
-        return new Response(
-          JSON.stringify({ error: "Review not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      review.likes = (review.likes || 0) + 1;
-      await kv.set(fullKey, review);
-
-      console.log(`Review ${fullKey} liked, new count: ${review.likes}`);
-      return new Response(
-        JSON.stringify({ success: true, likes: review.likes }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Delete review (author or admin only)
-    if (path.startsWith("/api/reviews/") && !path.endsWith("/like") && method === "DELETE") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const reviewKey = path.split("/")[3]; // /api/reviews/{key}
-
-      if (!reviewKey) {
-        return new Response(
-          JSON.stringify({ error: "Review key is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const fullKey = `review_${reviewKey}`;
-      const review = await kv.get(fullKey);
-
-      if (!review) {
-        return new Response(
-          JSON.stringify({ error: "Review not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // Check if user is the author or an admin
-      const isAuthor = review.author === user.user_metadata?.name;
-      const isAdmin = user.user_metadata?.role === "admin";
-
-      if (!isAuthor && !isAdmin) {
-        return new Response(
-          JSON.stringify({ error: "You can only delete your own reviews" }),
-          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      await kv.del(fullKey);
-
-      console.log(`Review ${fullKey} deleted by ${isAdmin ? "admin" : "author"}: ${user.user_metadata?.name}`);
       return new Response(
         JSON.stringify({ success: true }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Get all users (admin only)
-    if (path === "/api/admin/users" && method === "GET") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+    // ==================== ADDRESSES: 배송지 조회 ====================
+    if (p === "/api/addresses" && m === "GET") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
 
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      const { data: { users }, error: usersError } = await supabase.auth.admin.listUsers();
-
-      if (usersError) {
-        console.error("Error fetching users:", usersError);
-        return new Response(
-          JSON.stringify({ error: `Failed to fetch users: ${usersError.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const customers = users
-        .filter(u => u.user_metadata?.role !== "admin")
-        .map(u => ({
-          id: u.id,
-          email: u.email,
-          name: u.user_metadata?.name || "Unknown",
-          phone: u.user_metadata?.phone || "",
-          createdAt: u.created_at ? new Date(u.created_at).toISOString().split("T")[0] : "",
-          role: u.user_metadata?.role || "customer",
-          isBlocked: u.banned_until ? new Date(u.banned_until) > new Date() : false,
-        }));
-
-      console.log(`Retrieved ${customers.length} customers`);
-      return new Response(
-        JSON.stringify({ users: customers }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      const addresses = await kvGet(`addresses_${user.id}`) || [];
+      return new Response(JSON.stringify({ addresses }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
     }
 
-    // Get all admins (admin only)
-    if (path === "/api/admin/admins" && method === "GET") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      const { data: { users }, error: usersError } = await supabase.auth.admin.listUsers();
-
-      if (usersError) {
-        console.error("Error fetching admins:", usersError);
-        return new Response(
-          JSON.stringify({ error: `Failed to fetch admins: ${usersError.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const admins = users
-        .filter(u => u.user_metadata?.role === "admin")
-        .map(u => ({
-          id: u.id,
-          email: u.email,
-          name: u.user_metadata?.name || "Unknown",
-          createdAt: u.created_at ? new Date(u.created_at).toISOString().split("T")[0] : "",
-          role: "admin",
-        }));
-
-      console.log(`Retrieved ${admins.length} admins`);
-      return new Response(
-        JSON.stringify({ admins }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Block/Unblock user (admin only)
-    if (path.startsWith("/api/admin/users/") && path.endsWith("/block") && method === "POST") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = path.split("/")[4]; // /api/admin/users/{id}/block
-      const { block } = await req.json();
-
-      if (!userId) {
-        return new Response(
-          JSON.stringify({ error: "User ID is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      if (block) {
-        const bannedUntil = new Date();
-        bannedUntil.setFullYear(bannedUntil.getFullYear() + 100);
-
-        const { error: banError } = await supabase.auth.admin.updateUserById(userId, {
-          banned_until: bannedUntil.toISOString(),
-        });
-
-        if (banError) {
-          console.error("Error blocking user:", banError);
-          return new Response(
-            JSON.stringify({ error: `Failed to block user: ${banError.message}` }),
-            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-
-        console.log(`User ${userId} blocked`);
-        return new Response(
-          JSON.stringify({ success: true, message: "User blocked" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      } else {
-        // Unblock user by setting banned_until to null
-        const { error: unbanError } = await supabase.auth.admin.updateUserById(userId, {
-          banned_until: null,
-        });
-
-        if (unbanError) {
-          console.error("Error unblocking user:", unbanError);
-          return new Response(
-            JSON.stringify({ error: `Failed to unblock user: ${unbanError.message}` }),
-            { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-
-        console.log(`User ${userId} unblocked`);
-        return new Response(
-          JSON.stringify({ success: true, message: "User unblocked" }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-
-    // Get all products
-    if (path === "/api/products" && method === "GET") {
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-      const { data, error } = await supabase
-        .from("kv_store_94a0507e")
-        .select("key, value")
-        .like("key", "product_%");
-
-      if (error) {
-        console.error("Error fetching products:", error);
-        return new Response(
-          JSON.stringify({ error: "Failed to fetch products" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const products = data?.map((item: any) => item.value) || [];
-      console.log(`Retrieved ${products.length} products`);
-      return new Response(
-        JSON.stringify({ products }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Add new product (admin only)
-    if (path === "/api/products" && method === "POST") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const productData = await req.json();
-
-      if (!productData.name || !productData.price || !productData.category) {
-        return new Response(
-          JSON.stringify({ error: "Missing required fields" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const productId = Date.now();
-      const product = {
-        id: productId,
-        ...productData,
-        createdAt: new Date().toISOString(),
-      };
-
-      await kv.set(`product_${productId}`, product);
-
-      console.log("Product created successfully:", product);
-      return new Response(
-        JSON.stringify({ success: true, product }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Update product (admin only)
-    if (path.startsWith("/api/products/") && method === "PUT") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const productId = path.split("/")[3]; // /api/products/{id}
-      const productData = await req.json();
-
-      if (!productId) {
-        return new Response(
-          JSON.stringify({ error: "Product ID is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const existingProduct = await kv.get(`product_${productId}`);
-      if (!existingProduct) {
-        return new Response(
-          JSON.stringify({ error: "Product not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const updatedProduct = {
-        ...existingProduct,
-        ...productData,
-        id: Number(productId),
-        updatedAt: new Date().toISOString(),
-      };
-
-      await kv.set(`product_${productId}`, updatedProduct);
-
-      console.log("Product updated successfully:", updatedProduct);
-      return new Response(
-        JSON.stringify({ success: true, product: updatedProduct }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Delete product (admin only)
-    if (path.startsWith("/api/products/") && method === "DELETE") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const productId = path.split("/")[3]; // /api/products/{id}
-
-      if (!productId) {
-        return new Response(
-          JSON.stringify({ error: "Product ID is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      await kv.del(`product_${productId}`);
-
-      console.log(`Product ${productId} deleted`);
-      return new Response(
-        JSON.stringify({ success: true }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // ========== CART ROUTES ==========
-
-    // Get cart items by user
-    if (path === "/api/cart" && method === "GET") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = user.id;
-      const cartKey = `cart_${userId}`;
-      const cartData = await kv.get(cartKey);
-
-      console.log(`Retrieved cart for user ${userId}`);
-      return new Response(
-        JSON.stringify({ cart: cartData || [] }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Add item to cart
-    if (path === "/api/cart" && method === "POST") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const { productId, name, price, originalPrice, image, quantity } = await req.json();
-
-      if (!productId || !name || !price || !image) {
-        return new Response(
-          JSON.stringify({ error: "Missing required fields" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = user.id;
-      const cartKey = `cart_${userId}`;
-      const cartData = await kv.get(cartKey) || [];
-
-      // Find existing item
-      const existingItemIndex = cartData.findIndex((item: any) => item.productId === productId);
-
-      if (existingItemIndex >= 0) {
-        cartData[existingItemIndex].quantity += (quantity || 1);
-      } else {
-        cartData.push({
-          id: Date.now(),
-          userId,
-          productId,
-          name,
-          price,
-          originalPrice,
-          quantity: quantity || 1,
-          image
-        });
-      }
-
-      await kv.set(cartKey, cartData);
-
-      console.log(`Added item to cart for user ${userId}`);
-      return new Response(
-        JSON.stringify({ success: true, cart: cartData }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Clear cart - MUST BE BEFORE DELETE /api/cart/:id
-    if (path === "/api/cart/clear" && method === "DELETE") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = user.id;
-      const cartKey = `cart_${userId}`;
-      await kv.set(cartKey, []);
-
-      console.log(`Cleared cart for user ${userId}`);
-      return new Response(
-        JSON.stringify({ success: true }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Update cart item quantity
-    if (path.startsWith("/api/cart/") && method === "PUT") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const itemId = path.split("/")[3]; // /api/cart/{id}
-      const { quantity } = await req.json();
-
-      if (!itemId || quantity === undefined) {
-        return new Response(
-          JSON.stringify({ error: "Item ID and quantity are required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = user.id;
-      const cartKey = `cart_${userId}`;
-      const cartData = await kv.get(cartKey) || [];
-
-      const itemIndex = cartData.findIndex((item: any) => item.id === Number(itemId));
-
-      if (itemIndex === -1) {
-        return new Response(
-          JSON.stringify({ error: "Item not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      if (quantity <= 0) {
-        cartData.splice(itemIndex, 1);
-      } else {
-        cartData[itemIndex].quantity = quantity;
-      }
-
-      await kv.set(cartKey, cartData);
-
-      console.log(`Updated cart item ${itemId} for user ${userId}`);
-      return new Response(
-        JSON.stringify({ success: true, cart: cartData }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Delete cart item
-    if (path.startsWith("/api/cart/") && method === "DELETE") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const itemId = path.split("/")[3]; // /api/cart/{id}
-
-      if (!itemId) {
-        return new Response(
-          JSON.stringify({ error: "Item ID is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = user.id;
-      const cartKey = `cart_${userId}`;
-      const cartData = await kv.get(cartKey) || [];
-
-      const itemIndex = cartData.findIndex((item: any) => item.id === Number(itemId));
-
-      if (itemIndex === -1) {
-        return new Response(
-          JSON.stringify({ error: "Item not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      cartData.splice(itemIndex, 1);
-      await kv.set(cartKey, cartData);
-
-      console.log(`Deleted cart item ${itemId} for user ${userId}`);
-      return new Response(
-        JSON.stringify({ success: true, cart: cartData }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // ========== ORDER ROUTES ==========
-
-    // Get orders by user
-    if (path === "/api/orders" && method === "GET") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      const { data, error: dbError } = await supabase
-        .from("kv_store_94a0507e")
-        .select("key, value")
-        .like("key", `order_${user.id}_%`);
-
-      if (dbError) {
-        console.error("Error fetching orders:", dbError);
-        return new Response(
-          JSON.stringify({ error: "Failed to fetch orders" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const orders = data?.map((item: any) => item.value) || [];
-      orders.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-      console.log(`Retrieved ${orders.length} orders for user ${user.id}`);
-      return new Response(
-        JSON.stringify({ orders }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Create order
-    if (path === "/api/orders" && method === "POST") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const orderData = await req.json();
-
-      if (!orderData.items || !orderData.shippingAddress || !orderData.totalAmount) {
-        return new Response(
-          JSON.stringify({ error: "Missing required fields" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const orderId = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
-      const order = {
-        id: orderId,
+    // ==================== ADDRESSES: 배송지 추가 ====================
+    if (p === "/api/addresses" && m === "POST") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const body = await req.json();
+      const addresses = await kvGet(`addresses_${user.id}`) || [];
+      
+      const newAddress = {
+        ...body,
+        id: parseInt(generateId().replace(/_/g, "")),
         userId: user.id,
-        date: new Date().toISOString(),
-        status: "배송 준비 중",
-        items: orderData.items,
-        totalAmount: orderData.totalAmount,
-        shippingAddress: orderData.shippingAddress,
-        trackingNumber: undefined
+        createdAt: new Date().toISOString()
       };
 
-      await kv.set(`order_${user.id}_${orderId}`, order);
-
-      // Clear cart after order
-      await kv.set(`cart_${user.id}`, []);
-
-      console.log(`Order created: ${orderId} for user ${user.id}`);
-      return new Response(
-        JSON.stringify({ success: true, order }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Get all orders (admin only)
-    if (path === "/api/admin/orders" && method === "GET") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+      // 첫 번째 배송지거나 isDefault가 true인 경우
+      if (newAddress.isDefault || addresses.length === 0) {
+        // 기존 기본 배송지 해제
+        addresses.forEach((addr: any) => addr.isDefault = false);
+        newAddress.isDefault = true;
       }
 
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
+      addresses.push(newAddress);
+      await kvSet(`addresses_${user.id}`, addresses);
 
-      const { data, error: dbError } = await supabase
-        .from("kv_store_94a0507e")
-        .select("key, value")
-        .like("key", "order_%");
-
-      if (dbError) {
-        console.error("Error fetching orders:", dbError);
-        return new Response(
-          JSON.stringify({ error: "Failed to fetch orders" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const orders = data?.map((item: any) => item.value) || [];
-      orders.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-      console.log(`Retrieved ${orders.length} orders for admin`);
-      return new Response(
-        JSON.stringify({ orders }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Update order status (admin only)
-    if (path.startsWith("/api/orders/") && path.endsWith("/status") && method === "PUT") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const orderId = path.split("/")[3]; // /api/orders/{id}/status
-      const { status, trackingNumber } = await req.json();
-
-      if (!orderId || !status) {
-        return new Response(
-          JSON.stringify({ error: "Order ID and status are required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      // Find the order
-      const { data, error: dbError } = await supabase
-        .from("kv_store_94a0507e")
-        .select("key, value")
-        .like("key", `order_%${orderId}`)
-        .single();
-
-      if (dbError || !data) {
-        return new Response(
-          JSON.stringify({ error: "Order not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const order = data.value;
-      order.status = status;
-      if (trackingNumber) {
-        order.trackingNumber = trackingNumber;
-      }
-
-      await kv.set(data.key, order);
-
-      console.log(`Order ${orderId} status updated to ${status}`);
-      return new Response(
-        JSON.stringify({ success: true, order }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // ========== ADDRESS ROUTES ==========
-
-    // Get addresses by user
-    if (path === "/api/addresses" && method === "GET") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = user.id;
-      const addressKey = `addresses_${userId}`;
-      const addressData = await kv.get(addressKey);
-
-      console.log(`Retrieved addresses for user ${userId}`);
-      return new Response(
-        JSON.stringify({ addresses: addressData || [] }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Add address
-    if (path === "/api/addresses" && method === "POST") {
-      try {
-        const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-        if (error) {
-          console.error("Auth error:", error);
-          return new Response(
-            JSON.stringify({ error }),
-            { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-
-        const addressData = await req.json();
-        console.log("Address data received:", JSON.stringify(addressData));
-
-        if (!addressData.recipient || !addressData.phone || !addressData.address) {
-          console.error("Missing required fields:", addressData);
-          return new Response(
-            JSON.stringify({ error: "Missing required fields" }),
-            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
-        }
-
-        const userId = user.id;
-        const addressKey = `addresses_${userId}`;
-        console.log(`Fetching addresses for key: ${addressKey}`);
-        
-        const addresses = await kv.get(addressKey) || [];
-        console.log(`Current addresses count: ${addresses.length}`);
-
-        // If setting as default, unset other defaults
-        if (addressData.isDefault) {
-          addresses.forEach((addr: any) => {
-            addr.isDefault = false;
-          });
-        }
-
-        const newAddress = {
-          id: Date.now(),
-          userId,
-          ...addressData
-        };
-
-        addresses.push(newAddress);
-        console.log(`Saving ${addresses.length} addresses to key: ${addressKey}`);
-        await kv.set(addressKey, addresses);
-
-        console.log(`Added address for user ${userId}`);
-        return new Response(
-          JSON.stringify({ success: true, address: newAddress, addresses }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      } catch (err) {
-        console.error("Error in POST /api/addresses:", err);
-        return new Response(
-          JSON.stringify({ error: `Internal server error: ${err.message}` }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-
-    // Update address
-    if (path.startsWith("/api/addresses/") && method === "PUT") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const addressId = path.split("/")[3]; // /api/addresses/{id}
-      const addressData = await req.json();
-
-      if (!addressId) {
-        return new Response(
-          JSON.stringify({ error: "Address ID is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = user.id;
-      const addressKey = `addresses_${userId}`;
-      const addresses = await kv.get(addressKey) || [];
-
-      const addressIndex = addresses.findIndex((addr: any) => addr.id === Number(addressId));
-
-      if (addressIndex === -1) {
-        return new Response(
-          JSON.stringify({ error: "Address not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      // If setting as default, unset other defaults
-      if (addressData.isDefault) {
-        addresses.forEach((addr: any) => {
-          addr.isDefault = false;
-        });
-      }
-
-      addresses[addressIndex] = {
-        ...addresses[addressIndex],
-        ...addressData
-      };
-
-      await kv.set(addressKey, addresses);
-
-      console.log(`Updated address ${addressId} for user ${userId}`);
-      return new Response(
-        JSON.stringify({ success: true, address: addresses[addressIndex], addresses }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Delete address
-    if (path.startsWith("/api/addresses/") && method === "DELETE") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const addressId = path.split("/")[3]; // /api/addresses/{id}
-
-      if (!addressId) {
-        return new Response(
-          JSON.stringify({ error: "Address ID is required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const userId = user.id;
-      const addressKey = `addresses_${userId}`;
-      const addresses = await kv.get(addressKey) || [];
-
-      const addressIndex = addresses.findIndex((addr: any) => addr.id === Number(addressId));
-
-      if (addressIndex === -1) {
-        return new Response(
-          JSON.stringify({ error: "Address not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      addresses.splice(addressIndex, 1);
-      await kv.set(addressKey, addresses);
-
-      console.log(`Deleted address ${addressId} for user ${userId}`);
       return new Response(
         JSON.stringify({ success: true, addresses }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // ========== INQUIRY ROUTES ==========
+    // ==================== ADDRESSES: 배송지 수정 ====================
+    if (p.match(/^\/api\/addresses\/\d+$/) && m === "PUT") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
 
-    // Get inquiries by user
-    if (path === "/api/inquiries" && method === "GET") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+      const addressId = parseInt(p.split("/").pop()!);
+      const body = await req.json();
+      const addresses = await kvGet(`addresses_${user.id}`) || [];
+      
+      const index = addresses.findIndex((a: any) => a.id === addressId);
+      if (index === -1) {
+        return new Response(JSON.stringify({ error: "Address not found" }), { status: 404, headers: { ...cors, "Content-Type": "application/json" } });
       }
 
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      const { data, error: dbError } = await supabase
-        .from("kv_store_94a0507e")
-        .select("key, value")
-        .like("key", `inquiry_${user.id}_%`);
-
-      if (dbError) {
-        console.error("Error fetching inquiries:", dbError);
-        return new Response(
-          JSON.stringify({ error: "Failed to fetch inquiries" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+      // isDefault가 true로 변경된 경우
+      if (body.isDefault) {
+        addresses.forEach((addr: any) => addr.isDefault = false);
       }
 
-      const inquiries = data?.map((item: any) => item.value) || [];
-      inquiries.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      addresses[index] = { ...addresses[index], ...body, updatedAt: new Date().toISOString() };
+      await kvSet(`addresses_${user.id}`, addresses);
 
-      console.log(`Retrieved ${inquiries.length} inquiries for user ${user.id}`);
       return new Response(
-        JSON.stringify({ inquiries }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, addresses }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Create inquiry
-    if (path === "/api/inquiries" && method === "POST") {
-      const { user, error } = await verifyAuth(req.headers.get("Authorization"));
-      if (error) {
+    // ==================== ADDRESSES: 배송지 삭제 ====================
+    if (p.match(/^\/api\/addresses\/\d+$/) && m === "DELETE") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const addressId = parseInt(p.split("/").pop()!);
+      const addresses = await kvGet(`addresses_${user.id}`) || [];
+      
+      const filteredAddresses = addresses.filter((a: any) => a.id !== addressId);
+      
+      // 삭제된 주소가 기본 배송지였다면 첫 번째 주소를 기본으로 설정
+      const deletedAddr = addresses.find((a: any) => a.id === addressId);
+      if (deletedAddr?.isDefault && filteredAddresses.length > 0) {
+        filteredAddresses[0].isDefault = true;
+      }
+
+      await kvSet(`addresses_${user.id}`, filteredAddresses);
+
+      return new Response(
+        JSON.stringify({ success: true, addresses: filteredAddresses }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ==================== INQUIRIES: 문의 생성 ====================
+    if (p === "/api/inquiries" && m === "POST") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      // ✅ Rate Limit: 1분 3회, 1시간 10회
+      const rateLimitResult = await checkRateLimit(`inquiry_${user.id}`, 3, 10);
+      if (!rateLimitResult.allowed) {
         return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          JSON.stringify({ error: rateLimitResult.error }),
+          { 
+            status: 429, 
+            headers: { 
+              ...cors, 
+              "Content-Type": "application/json",
+              "Retry-After": rateLimitResult.retryAfter?.toString() || "60"
+            } 
+          }
         );
       }
 
-      const inquiryData = await req.json();
-
-      if (!inquiryData.title || !inquiryData.content || !inquiryData.category) {
-        return new Response(
-          JSON.stringify({ error: "Missing required fields" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const inquiryId = `INQ-${Date.now()}`;
-      const inquiry = {
-        id: inquiryId,
+      const body = await req.json();
+      const inquiries = await kvGet("inquiries_list") || [];
+      
+      const newInquiry = {
+        ...body,
+        id: generateId(),
         userId: user.id,
         userName: user.user_metadata?.name || "Unknown",
-        title: inquiryData.title,
-        content: inquiryData.content,
-        category: inquiryData.category,
         status: "대기",
         createdAt: new Date().toISOString()
       };
 
-      await kv.set(`inquiry_${user.id}_${inquiryId}`, inquiry);
+      inquiries.push(newInquiry);
+      await kvSet("inquiries_list", inquiries);
 
-      console.log(`Inquiry created: ${inquiryId} for user ${user.id}`);
+      // 사용자별 문의도 저장
+      const userInquiries = await kvGet(`inquiries_user_${user.id}`) || [];
+      userInquiries.push(newInquiry);
+      await kvSet(`inquiries_user_${user.id}`, userInquiries);
+
       return new Response(
-        JSON.stringify({ success: true, inquiry }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, inquiry: newInquiry }),
+        { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Get all inquiries (admin only)
-    if (path === "/api/admin/inquiries" && method === "GET") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+    // ==================== INQUIRIES: 사용자 문의 조회 ====================
+    if (p === "/api/inquiries/my" && m === "GET") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
 
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      const { data, error: dbError } = await supabase
-        .from("kv_store_94a0507e")
-        .select("key, value")
-        .like("key", "inquiry_%");
-
-      if (dbError) {
-        console.error("Error fetching inquiries:", dbError);
-        return new Response(
-          JSON.stringify({ error: "Failed to fetch inquiries" }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const inquiries = data?.map((item: any) => item.value) || [];
-      inquiries.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-      console.log(`Retrieved ${inquiries.length} inquiries for admin`);
-      return new Response(
-        JSON.stringify({ inquiries }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      const inquiries = await kvGet(`inquiries_user_${user.id}`) || [];
+      return new Response(JSON.stringify({ inquiries }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
     }
 
-    // Answer inquiry (admin only)
-    if (path.startsWith("/api/inquiries/") && path.endsWith("/answer") && method === "PUT") {
-      const { user, error } = await verifyAdmin(req.headers.get("Authorization"));
-      if (error) {
-        return new Response(
-          JSON.stringify({ error }),
-          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+    // ==================== INQUIRIES: 문의 답변 (관리자) ====================
+    if (p.match(/^\/api\/inquiries\/[^/]+\/answer$/) && m === "PUT") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const inquiryId = p.split("/")[3];
+      const body = await req.json();
+      
+      const inquiries = await kvGet("inquiries_list") || [];
+      const index = inquiries.findIndex((i: any) => i.id === inquiryId);
+      
+      if (index === -1) {
+        return new Response(JSON.stringify({ error: "Inquiry not found" }), { status: 404, headers: { ...cors, "Content-Type": "application/json" } });
       }
 
-      const inquiryId = path.split("/")[3]; // /api/inquiries/{id}/answer
-      const { answer } = await req.json();
-
-      if (!inquiryId || !answer) {
-        return new Response(
-          JSON.stringify({ error: "Inquiry ID and answer are required" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const supabase = createClient(
-        Deno.env.get("SUPABASE_URL") ?? "",
-        Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-      );
-
-      // Find the inquiry
-      const { data, error: dbError } = await supabase
-        .from("kv_store_94a0507e")
-        .select("key, value")
-        .like("key", `inquiry_%${inquiryId}`)
-        .single();
-
-      if (dbError || !data) {
-        return new Response(
-          JSON.stringify({ error: "Inquiry not found" }),
-          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const inquiry = data.value;
-      inquiry.answer = {
-        content: answer,
+      inquiries[index].status = "답변완료";
+      inquiries[index].answer = {
+        content: body.answer,
         answeredAt: new Date().toISOString(),
-        answeredBy: user.id
+        answeredBy: user.user_metadata?.name || "관리자"
       };
-      inquiry.status = "답변완료";
 
-      await kv.set(data.key, inquiry);
+      await kvSet("inquiries_list", inquiries);
 
-      console.log(`Inquiry ${inquiryId} answered by admin ${user.id}`);
+      // 사용자별 문의도 업데이트
+      const userId = inquiries[index].userId;
+      const userInquiries = await kvGet(`inquiries_user_${userId}`) || [];
+      const userIndex = userInquiries.findIndex((i: any) => i.id === inquiryId);
+      if (userIndex !== -1) {
+        userInquiries[userIndex] = inquiries[index];
+        await kvSet(`inquiries_user_${userId}`, userInquiries);
+      }
+
       return new Response(
-        JSON.stringify({ success: true, inquiry }),
-        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, inquiry: inquiries[index] }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }
 
-    // Default 404
-    return new Response(
-      JSON.stringify({ error: "Not Found", path }),
-      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  } catch (error) {
-    console.error("=== Error:", error, "===");
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    // ==================== ADMIN: 전체 문의 조회 ====================
+    if (p === "/api/admin/inquiries" && m === "GET") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const inquiries = await kvGet("inquiries_list") || [];
+      return new Response(JSON.stringify({ inquiries }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
+
+    // ==================== REVIEWS: 리뷰 조회 ====================
+    if (p === "/api/reviews" && m === "GET") {
+      const productId = url.searchParams.get("productId");
+      
+      if (productId) {
+        const reviews = await kvGet(`reviews_product_${productId}`) || [];
+        return new Response(JSON.stringify({ reviews }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+      } else {
+        const allReviews = await kvGet("reviews_list") || [];
+        return new Response(JSON.stringify({ reviews: allReviews }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+    }
+
+    // ==================== REVIEWS: 리뷰 추가 ====================
+    if (p === "/api/reviews" && m === "POST") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      // ✅ Rate Limit: 1분 3회, 1시간 20회
+      const rateLimitResult = await checkRateLimit(`review_${user.id}`, 3, 20);
+      if (!rateLimitResult.allowed) {
+        return new Response(
+          JSON.stringify({ error: rateLimitResult.error }),
+          { 
+            status: 429, 
+            headers: { 
+              ...cors, 
+              "Content-Type": "application/json",
+              "Retry-After": rateLimitResult.retryAfter?.toString() || "60"
+            } 
+          }
+        );
+      }
+
+      const body = await req.json();
+      
+      const newReview = {
+        ...body,
+        id: parseInt(generateId().replace(/_/g, "")),
+        userId: user.id,
+        userName: user.user_metadata?.name || "Unknown",
+        createdAt: new Date().toISOString(),
+        helpful: 0,
+        helpfulUsers: []
+      };
+
+      // 전체 리뷰 목록에 추가
+      const allReviews = await kvGet("reviews_list") || [];
+      allReviews.push(newReview);
+      await kvSet("reviews_list", allReviews);
+
+      // 상품별 리뷰에 추가
+      const productReviews = await kvGet(`reviews_product_${body.productId}`) || [];
+      productReviews.push(newReview);
+      await kvSet(`reviews_product_${body.productId}`, productReviews);
+
+      return new Response(
+        JSON.stringify({ success: true, review: newReview }),
+        { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ==================== REVIEWS: 도움이 됐어요 토글 ====================
+    if (p.match(/^\/api\/reviews\/\d+\/helpful$/) && m === "POST") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const reviewId = parseInt(p.split("/")[3]);
+      
+      // 전체 리뷰 목록에서 찾기
+      const allReviews = await kvGet("reviews_list") || [];
+      const reviewIndex = allReviews.findIndex((r: any) => r.id === reviewId);
+      
+      if (reviewIndex === -1) {
+        return new Response(JSON.stringify({ error: "Review not found" }), { status: 404, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+
+      const review = allReviews[reviewIndex];
+      const helpfulUsers = review.helpfulUsers || [];
+      
+      // 이미 눌렀는지 확인
+      if (helpfulUsers.includes(user.id)) {
+        return new Response(
+          JSON.stringify({ error: "Already marked as helpful", alreadyMarked: true }),
+          { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
+        );
+      }
+
+      // 추가
+      review.helpfulUsers = [...helpfulUsers, user.id];
+      review.helpful = review.helpfulUsers.length;
+      allReviews[reviewIndex] = review;
+      await kvSet("reviews_list", allReviews);
+
+      // 상품별 리뷰도 업데이트
+      const productReviews = await kvGet(`reviews_product_${review.productId}`) || [];
+      const productReviewIndex = productReviews.findIndex((r: any) => r.id === reviewId);
+      if (productReviewIndex !== -1) {
+        productReviews[productReviewIndex] = review;
+        await kvSet(`reviews_product_${review.productId}`, productReviews);
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, review }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ==================== REVIEWS: 리뷰 삭제 ====================
+    if (p.match(/^\/api\/reviews\/\d+$/) && m === "DELETE") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const reviewId = parseInt(p.split("/").pop()!);
+      
+      const allReviews = await kvGet("reviews_list") || [];
+      const review = allReviews.find((r: any) => r.id === reviewId);
+      
+      if (!review) {
+        return new Response(JSON.stringify({ error: "Review not found" }), { status: 404, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+
+      // 본인 또는 관리자만 삭제 가능
+      if (review.userId !== user.id && user.user_metadata?.role !== "admin") {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 403, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+
+      // 전체 리뷰에서 삭제
+      const filteredAllReviews = allReviews.filter((r: any) => r.id !== reviewId);
+      await kvSet("reviews_list", filteredAllReviews);
+
+      // 상품별 리뷰에서 삭제
+      const productReviews = await kvGet(`reviews_product_${review.productId}`) || [];
+      const filteredProductReviews = productReviews.filter((r: any) => r.id !== reviewId);
+      await kvSet(`reviews_product_${review.productId}`, filteredProductReviews);
+
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ==================== CART: 장바구니 조회 ====================
+    if (p === "/api/cart" && m === "GET") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const cart = await kvGet(`cart_${user.id}`) || [];
+      return new Response(JSON.stringify({ cart }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
+
+    // ==================== CART: 장바구니 업데이트 ====================
+    if (p === "/api/cart" && m === "POST") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const body = await req.json();
+      await kvSet(`cart_${user.id}`, body.cart);
+
+      return new Response(
+        JSON.stringify({ success: true }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ==================== ORDERS: 주문 생성 ====================
+    if (p === "/api/orders" && m === "POST") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      // ✅ Rate Limit: 1분 3회, 1시간 10회
+      const rateLimitResult = await checkRateLimit(`order_${user.id}`, 3, 10);
+      if (!rateLimitResult.allowed) {
+        return new Response(
+          JSON.stringify({ error: rateLimitResult.error }),
+          { 
+            status: 429, 
+            headers: { 
+              ...cors, 
+              "Content-Type": "application/json",
+              "Retry-After": rateLimitResult.retryAfter?.toString() || "60"
+            } 
+          }
+        );
+      }
+
+      const body = await req.json();
+      
+      const newOrder = {
+        ...body,
+        id: parseInt(generateId().replace(/_/g, "")),
+        userId: user.id,
+        createdAt: new Date().toISOString(),
+        status: "주문접수"
+      };
+
+      // 전체 주문 목록에 추가
+      const allOrders = await kvGet("orders_list") || [];
+      allOrders.push(newOrder);
+      await kvSet("orders_list", allOrders);
+
+      // 사용자별 주문에 추가
+      const userOrders = await kvGet(`orders_user_${user.id}`) || [];
+      userOrders.push(newOrder);
+      await kvSet(`orders_user_${user.id}`, userOrders);
+
+      return new Response(
+        JSON.stringify({ success: true, order: newOrder }),
+        { status: 201, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ==================== ORDERS: 사용자 주문 조회 ====================
+    if (p === "/api/orders/my" && m === "GET") {
+      const { user, error } = await auth(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const orders = await kvGet(`orders_user_${user.id}`) || [];
+      return new Response(JSON.stringify({ orders }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
+
+    // ==================== ORDERS: 전체 주문 조회 (관리자) ====================
+    if (p === "/api/admin/orders" && m === "GET") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const orders = await kvGet("orders_list") || [];
+      return new Response(JSON.stringify({ orders }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
+
+    // ==================== ORDERS: 주문 상태 변경 (관리자) ====================
+    if (p.match(/^\/api\/orders\/\d+\/status$/) && m === "PUT") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+
+      const orderId = parseInt(p.split("/")[3]);
+      const body = await req.json();
+      
+      const allOrders = await kvGet("orders_list") || [];
+      const orderIndex = allOrders.findIndex((o: any) => o.id === orderId);
+      
+      if (orderIndex === -1) {
+        return new Response(JSON.stringify({ error: "Order not found" }), { status: 404, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+
+      allOrders[orderIndex].status = body.status;
+      allOrders[orderIndex].updatedAt = new Date().toISOString();
+      await kvSet("orders_list", allOrders);
+
+      // 사용자별 주문도 업데이트
+      const userId = allOrders[orderIndex].userId;
+      const userOrders = await kvGet(`orders_user_${userId}`) || [];
+      const userOrderIndex = userOrders.findIndex((o: any) => o.id === orderId);
+      if (userOrderIndex !== -1) {
+        userOrders[userOrderIndex] = allOrders[orderIndex];
+        await kvSet(`orders_user_${userId}`, userOrders);
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, order: allOrders[orderIndex] }),
+        { status: 200, headers: { ...cors, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ==================== ADMIN: 사용자 목록 조회 ====================
+    if (p === "/api/admin/users" && m === "GET") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+      
+      const { data: { users } } = await supabase().auth.admin.listUsers();
+      // ✅ app_metadata.role로 필터링
+      const cs = await Promise.all(users.filter(u => u.app_metadata?.role !== "admin").map(async u => {
+        const b = await kvGet(`blocked_user_${u.id}`);
+        return { 
+          id: u.id, 
+          email: u.email, 
+          name: u.user_metadata?.name || "Unknown", 
+          phone: u.user_metadata?.phone || "", 
+          createdAt: u.created_at ? new Date(u.created_at).toISOString().split("T")[0] : "", 
+          role: u.app_metadata?.role || "customer", // ✅ app_metadata.role
+          isBlocked: b?.isBlocked || false 
+        };
+      }));
+      return new Response(JSON.stringify({ users: cs }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
+
+    // ==================== ADMIN: 사용자 차단/해제 ====================
+    if (p.match(/^\/api\/admin\/users\/[^/]+\/block$/) && (m === "POST" || m === "PUT")) {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+      
+      const uid = p.split("/")[4];
+      const body = await req.json();
+      const blk = body.block !== undefined ? body.block : body.isBlocked;
+      
+      if (blk) {
+        await kvSet(`blocked_user_${uid}`, { isBlocked: true, blockedAt: new Date().toISOString(), blockedBy: user.id });
+        return new Response(JSON.stringify({ success: true, message: "Blocked" }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+      } else {
+        await kvDel(`blocked_user_${uid}`);
+        return new Response(JSON.stringify({ success: true, message: "Unblocked" }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+    }
+
+    // ==================== ADMIN: 관리자 목록 조회 ====================
+    if (p === "/api/admin/admins" && m === "GET") {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+      
+      const { data: { users } } = await supabase().auth.admin.listUsers();
+      // ✅ app_metadata.role로 필터링
+      const admins = await Promise.all(users.filter(u => u.app_metadata?.role === "admin").map(async u => {
+        const b = await kvGet(`blocked_admin_${u.id}`);
+        return { 
+          id: u.id, 
+          email: u.email, 
+          name: u.user_metadata?.name || "Unknown", 
+          phone: u.user_metadata?.phone || "", 
+          createdAt: u.created_at ? new Date(u.created_at).toISOString().split("T")[0] : "", 
+          role: "admin",
+          isBlocked: b?.isBlocked || false 
+        };
+      }));
+      return new Response(JSON.stringify({ admins }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+    }
+
+    // ==================== ADMIN: 관리자 차단/해제 ====================
+    if (p.match(/^\/api\/admin\/admins\/[^/]+\/block$/) && (m === "POST" || m === "PUT")) {
+      const { user, error } = await admin(req.headers.get("Authorization"));
+      if (error) return new Response(JSON.stringify({ error }), { status: 401, headers: { ...cors, "Content-Type": "application/json" } });
+      
+      const uid = p.split("/")[4];
+      const body = await req.json();
+      const blk = body.block !== undefined ? body.block : body.isBlocked;
+      
+      if (blk) {
+        await kvSet(`blocked_admin_${uid}`, { isBlocked: true, blockedAt: new Date().toISOString(), blockedBy: user.id });
+        return new Response(JSON.stringify({ success: true, message: "Admin blocked" }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+      } else {
+        await kvDel(`blocked_admin_${uid}`);
+        return new Response(JSON.stringify({ success: true, message: "Admin unblocked" }), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
+      }
+    }
+
+    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: { ...cors, "Content-Type": "application/json" } });
+  } catch (e) {
+    console.error("Server error:", e);
+    return new Response(JSON.stringify({ error: e.message }), { status: 500, headers: { ...cors, "Content-Type": "application/json" } });
   }
 });
-
-console.log("=== API Server configured ===");

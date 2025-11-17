@@ -27,7 +27,8 @@ export default function CustomerServicePage() {
   const [showForm, setShowForm] = useState(false);
   const [selectedInquiry, setSelectedInquiry] = useState<Inquiry | null>(null);
   const [userInquiries, setUserInquiries] = useState<Inquiry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     title: "",
     content: "",
@@ -41,7 +42,7 @@ export default function CustomerServicePage() {
       if (!session) return;
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/inquiries`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/inquiries/my`,
         {
           headers: {
             'Authorization': `Bearer ${session.access_token}`,
@@ -59,7 +60,7 @@ export default function CustomerServicePage() {
       console.error('Failed to load inquiries:', error);
       setUserInquiries([]);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -67,7 +68,7 @@ export default function CustomerServicePage() {
     if (isLoggedIn) {
       loadInquiries();
     } else {
-      setLoading(false);
+      setIsLoading(false);
     }
   }, [isLoggedIn]);
 
@@ -91,19 +92,21 @@ export default function CustomerServicePage() {
         return;
       }
 
+      setIsSubmitting(true);
+      const newInquiry = {
+        title: formData.title.trim(),
+        content: formData.content.trim(),
+        category: formData.category
+      };
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/inquiries`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/inquiries`,
         {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            title: formData.title.trim(),
-            content: formData.content.trim(),
-            category: formData.category
-          })
+          body: JSON.stringify({ inquiry: newInquiry })
         }
       );
 
@@ -118,6 +121,8 @@ export default function CustomerServicePage() {
     } catch (error) {
       console.error('Failed to submit inquiry:', error);
       toast.error("문의 등록에 실패했습니다");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -211,9 +216,14 @@ export default function CustomerServicePage() {
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  className="flex-1 bg-black text-white rounded px-4 py-3 font-bold hover:bg-gray-800"
+                  disabled={isSubmitting}
+                  className={`flex-1 rounded px-4 py-3 font-bold ${
+                    isSubmitting
+                      ? 'bg-gray-400 text-white cursor-not-allowed'
+                      : 'bg-black text-white hover:bg-gray-800'
+                  }`}
                 >
-                  등록
+                  {isSubmitting ? "등록 중..." : "등록"}
                 </button>
                 <button
                   type="button"
@@ -281,7 +291,7 @@ export default function CustomerServicePage() {
         {!showForm && !selectedInquiry && (
           <div>
             <h2 className="font-bold mb-4">내 문의 내역</h2>
-            {loading ? (
+            {isLoading ? (
               <div className="text-center py-20">
                 <p className="text-gray-500">문의 내역을 불러오는 중...</p>
               </div>

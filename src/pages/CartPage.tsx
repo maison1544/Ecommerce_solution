@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 import { toast } from "sonner";
 import { createClient } from "../utils/supabase/client";
 import { projectId } from "../utils/supabase/info";
+import { ImageWithFallback } from "../components/figma/ImageWithFallback";
 
 interface CartItem {
   id: number;
@@ -38,7 +39,7 @@ export default function CartPage() {
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/cart`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/cart`,
         {
           headers: {
             'Authorization': `Bearer ${session.access_token}`,
@@ -83,7 +84,7 @@ export default function CartPage() {
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/cart/${id}`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/cart/${id}`,
         {
           method: 'PUT',
           headers: {
@@ -117,7 +118,7 @@ export default function CartPage() {
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/api/cart/${id}`,
+        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/cart/${id}`,
         {
           method: 'DELETE',
           headers: {
@@ -185,7 +186,7 @@ export default function CartPage() {
                 <div className="flex gap-4">
                   {/* Product Image */}
                   <div className="w-24 h-24 flex-shrink-0 rounded bg-gradient-to-b from-white to-[#e8e7e7] overflow-hidden">
-                    <img
+                    <ImageWithFallback
                       src={item.image}
                       alt={item.name}
                       className="w-full h-full object-cover"
