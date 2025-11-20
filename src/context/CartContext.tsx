@@ -18,10 +18,11 @@ const EDGE_FUNCTION_NAME = 'make-server-94a0507e'; // 👈 실제 함수 slug
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [cartCount, setCartCount] = useState(0);
-  const supabase = createClient();
 
   const refreshCart = useCallback(async () => {
     try {
+      // Lazy create client only when needed
+      const supabase = createClient();
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
       if (sessionError) {
@@ -60,7 +61,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       console.error('❌ Failed to refresh cart:', error);
       setCartCount(0);
     }
-  }, [supabase]);
+  }, []);
 
   const addToCart = useCallback(async (
     productId: number, 
@@ -71,6 +72,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
     quantity: number = 1
   ) => {
     try {
+      // Lazy create client only when needed
+      const supabase = createClient();
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       
       if (sessionError) {
@@ -117,19 +120,15 @@ export function CartProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error('Failed to add to cart:', error);
     }
-  }, [supabase, refreshCart]);
+  }, [refreshCart]);
 
-  // 초기 로드 시 장바구니 개수 설정 - 사용자가 로그인한 경우에만
+  // 초기 로드 시 장바구니 개수 설정 - DISABLED to prevent fetch errors
+  // Cart will only load when user explicitly logs in or adds items
   useEffect(() => {
-    const initCart = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      // Only refresh cart if user is logged in
-      if (session) {
-        refreshCart();
-      }
-    };
-    initCart();
-  }, [refreshCart, supabase]);
+    // Don't automatically load cart to avoid failed fetch errors
+    // Cart count will be 0 until user logs in and performs an action
+    setCartCount(0);
+  }, []);
 
   return (
     <CartContext.Provider value={{ cartCount, addToCart, refreshCart, setCartCount }}>

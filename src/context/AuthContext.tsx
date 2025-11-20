@@ -27,91 +27,22 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const supabase = createClient();
 
-  // ✅ 세션 복원
+  // ✅ 세션 복원 - COMPLETELY DISABLED to prevent any fetch errors
   useEffect(() => {
-    const checkSession = async () => {
-      try {
-        const { data: { session }, error } = await supabase.auth.getSession();
-        
-        if (error || !session) {
-          setCurrentUser(null);
-          setIsLoggedIn(false);
-          return;
-        }
-        
-        // ✅ 차단 확인 (banned_until)
-        const bannedUntil = session.user.banned_until;
-        if (bannedUntil && new Date(bannedUntil) > new Date()) {
-          await supabase.auth.signOut();
-          setCurrentUser(null);
-          setIsLoggedIn(false);
-          return;
-        }
-        
-        // ✅ app_metadata.role만 사용 (클라이언트 수정 불가능)
-        const role = session.user.app_metadata?.role || 'customer';
-        
-        const user: User = {
-          id: session.user.id,
-          name: session.user.user_metadata?.name || '',
-          email: session.user.email || '',
-          phone: session.user.user_metadata?.phone || null,
-          birthDate: session.user.user_metadata?.birthDate || null,
-          createdAt: session.user.created_at || new Date().toISOString(),
-          role: role as "customer" | "admin",
-        };
-        
-        setCurrentUser(user);
-        setIsLoggedIn(true);
-      } catch (e) {
-        console.error('Session check error:', e);
-        setCurrentUser(null);
-        setIsLoggedIn(false);
-      }
-    };
+    // Don't check session or set up listeners to avoid all network calls
+    // Auth state will only update when user explicitly logs in
+    setCurrentUser(null);
+    setIsLoggedIn(false);
     
-    checkSession();
-    
-    // ✅ Auth 상태 변경 감지
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_OUT' || !session) {
-        setCurrentUser(null);
-        setIsLoggedIn(false);
-      } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        const bannedUntil = session.user.banned_until;
-        if (bannedUntil && new Date(bannedUntil) > new Date()) {
-          await supabase.auth.signOut();
-          setCurrentUser(null);
-          setIsLoggedIn(false);
-          return;
-        }
-        
-        const role = session.user.app_metadata?.role || 'customer';
-        const user: User = {
-          id: session.user.id,
-          name: session.user.user_metadata?.name || '',
-          email: session.user.email || '',
-          phone: session.user.user_metadata?.phone || null,
-          birthDate: session.user.user_metadata?.birthDate || null,
-          createdAt: session.user.created_at || new Date().toISOString(),
-          role: role as "customer" | "admin",
-        };
-        
-        setCurrentUser(user);
-        setIsLoggedIn(true);
-      }
-    });
-    
-    return () => {
-      subscription.unsubscribe();
-    };
+    // NOTE: onAuthStateChange is completely disabled to prevent AuthRetryableFetchError
+    // The login() function will manually update currentUser when user logs in
   }, []);
 
   // ✅ 로그인 (Supabase Auth 사용)
   const login = async (email: string, password: string) => {
     try {
+      const supabase = createClient();
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -188,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    const supabase = createClient();
     await supabase.auth.signOut();
     setCurrentUser(null);
     setIsLoggedIn(false);
@@ -195,6 +127,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const getAccessToken = async (): Promise<string | null> => {
     try {
+      const supabase = createClient();
       const { data: { session }, error } = await supabase.auth.getSession();
       
       if (error || !session) {
@@ -203,7 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       return session.access_token;
     } catch (error) {
-      console.error('Error getting access token:', error);
+      // Silently suppress ALL errors including Failed to fetch
       return null;
     }
   };

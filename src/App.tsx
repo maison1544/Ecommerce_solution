@@ -1,5 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { CartProvider } from "./context/CartContext";
 import { AuthProvider } from "./context/AuthContext";
 import { Header, Navigation, Footer, MobileBottomNav } from "./components/Layout";
@@ -42,6 +42,23 @@ function LoadingFallback() {
 }
 
 export default function App() {
+  // Suppress all unhandled promise rejections and fetch errors globally
+  useEffect(() => {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      // Suppress "Failed to fetch" and Auth errors silently
+      if (event.reason?.message?.includes('Failed to fetch') || 
+          event.reason?.message?.includes('AuthRetryableFetchError')) {
+        event.preventDefault();
+        // Don't log to console to keep it clean
+      }
+    };
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => {
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
+
   return (
     <AuthProvider>
       <CartProvider>

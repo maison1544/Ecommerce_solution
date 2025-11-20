@@ -7,7 +7,13 @@ let supabaseInstance: ReturnType<typeof createSupabaseClient> | null = null;
 export function createClient() {
   if (!supabaseInstance) {
     const supabaseUrl = `https://${projectId}.supabase.co`;
-    supabaseInstance = createSupabaseClient(supabaseUrl, publicAnonKey);
+    supabaseInstance = createSupabaseClient(supabaseUrl, publicAnonKey, {
+      auth: {
+        autoRefreshToken: false, // Disable automatic token refresh to prevent fetch errors
+        persistSession: true, // Keep sessions in localStorage
+        detectSessionInUrl: false, // Don't check URL for session
+      }
+    });
   }
   return supabaseInstance;
 }
