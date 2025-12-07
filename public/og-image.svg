@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a1a"/>
+      <stop offset="100%" style="stop-color:#2d2d2d"/>
+    </linearGradient>
+    <linearGradient id="goldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#d4af37"/>
+      <stop offset="50%" style="stop-color:#b78b1f"/>
+      <stop offset="100%" style="stop-color:#8b6914"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bgGradient)"/>
+  
+  <!-- Decorative lines -->
+  <line x1="100" y1="150" x2="1100" y2="150" stroke="url(#goldGradient)" stroke-width="2" opacity="0.3"/>
+  <line x1="100" y1="480" x2="1100" y2="480" stroke="url(#goldGradient)" stroke-width="2" opacity="0.3"/>
+  
+  <!-- Logo Circle -->
+  <circle cx="600" cy="250" r="80" fill="url(#goldGradient)"/>
+  <text x="600" y="280" font-family="Arial, sans-serif" font-size="80" font-weight="bold" fill="white" text-anchor="middle">S</text>
+  
+  <!-- Main Title -->
+  <text x="600" y="400" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="white" text-anchor="middle">Solution Studio</text>
+  
+  <!-- Subtitle -->
+  <text x="600" y="460" font-family="Arial, sans-serif" font-size="24" fill="#b78b1f" text-anchor="middle">프리미엄 쇼핑몰</text>
+  
+  <!-- Tagline -->
+  <text x="600" y="520" font-family="Arial, sans-serif" font-size="18" fill="#888888" text-anchor="middle">디지털/가전 • 패션 • 뷰티 • 식품</text>
+</svg>

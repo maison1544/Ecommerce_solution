@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { User, Package, ShoppingCart, MapPin, Settings, LogOut } from "lucide-react";
+import {
+  User,
+  Package,
+  ShoppingCart,
+  MapPin,
+  Settings,
+  LogOut,
+} from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
 import { toast } from "sonner";
-import { getAddressesByUserId } from "../data/addresses";
-import { projectId, publicAnonKey } from "../utils/supabase/info";
+// import { getAddressesByUserId } from "../data/addresses"; // 로컬 데이터 사용 안 함
+import { API_BASE_URL } from "../utils/api";
 
 interface OrderItem {
   id: number;
@@ -20,7 +27,8 @@ interface Order {
   id: string;
   userId: string;
   date: string;
-  status: "배송 준비 중" | "배송 중" | "배송 완료" | "취소";
+  status?: "배송 준비 중" | "배송 중" | "배송 완료" | "취소";
+  shippingStatus?: string; // API에서 사용하는 필드
   items: OrderItem[];
   totalAmount: number;
   trackingNumber?: string;
@@ -40,6 +48,7 @@ export default function AccountPage() {
   const [addressCount, setAddressCount] = useState(0);
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
   const [totalOrders, setTotalOrders] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!isLoggedIn || !currentUser) {
@@ -48,38 +57,57 @@ export default function AccountPage() {
       return;
     }
 
-    // 배송지 개수 로드
-    const addresses = getAddressesByUserId(currentUser.id);
-    setAddressCount(addresses.length);
-    
+    // 배송지 개수 로드 - API에서 가져오기
+    const loadAddresses = async () => {
+      try {
+        const token = await getAccessToken();
+        if (!token) return;
+
+        const response = await fetch(`${API_BASE_URL}/api/addresses`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setAddressCount(data.addresses?.length || 0);
+        }
+      } catch (error) {
+        console.error("Failed to load addresses:", error);
+      }
+    };
+
     // API에서 주문 데이터 로드
     const loadOrders = async () => {
       try {
         const token = await getAccessToken();
         if (!token) return;
 
-        const response = await fetch(
-          `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/orders`,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-            }
-          }
-        );
+        const response = await fetch(`${API_BASE_URL}/api/orders`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
 
         if (response.ok) {
           const data = await response.json();
-          const userOrders = (data.orders || [])
-            .sort((a: Order, b: Order) => new Date(b.date).getTime() - new Date(a.date).getTime());
-          
+          const userOrders = (data.orders || []).sort(
+            (a: Order, b: Order) =>
+              new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+          );
+
           setTotalOrders(userOrders.length);
           setRecentOrders(userOrders.slice(0, 2));
         }
       } catch (error) {
-        console.error('Failed to load orders:', error);
+        console.error("Failed to load orders:", error);
+      } finally {
+        setLoading(false);
       }
     };
 
+    loadAddresses();
     loadOrders();
   }, [isLoggedIn, currentUser, navigate, getAccessToken]);
 
@@ -93,6 +121,18 @@ export default function AccountPage() {
 
   if (!currentUser) {
     return null;
+  }
+
+  if (loading) {
+    return (
+      <main className="container mx-auto px-4 lg:px-8 py-8 lg:py-12">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex items-center justify-center py-20">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#b78b1f]"></div>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   return (
@@ -161,8 +201,12 @@ export default function AccountPage() {
                   </div>
                   <div className="flex-1">
                     <h3 className="font-bold mb-1">주문 내역</h3>
-                    <p className="text-sm text-gray-600">주문한 상품을 확인하세요</p>
-                    <p className="text-xs text-[#b78b1f] mt-2">진행 중인 주문 {totalOrders}건</p>
+                    <p className="text-sm text-gray-600">
+                      주문한 상품을 확인하세요
+                    </p>
+                    <p className="text-xs text-[#b78b1f] mt-2">
+                      진행 중인 주문 {totalOrders}건
+                    </p>
                   </div>
                 </div>
               </Link>
@@ -178,8 +222,12 @@ export default function AccountPage() {
                   </div>
                   <div className="flex-1">
                     <h3 className="font-bold mb-1">장바구니</h3>
-                    <p className="text-sm text-gray-600">장바구니를 확인하세요</p>
-                    <p className="text-xs text-[#b78b1f] mt-2">담은 상품 {cartCount}개</p>
+                    <p className="text-sm text-gray-600">
+                      장바구니를 확인하세요
+                    </p>
+                    <p className="text-xs text-[#b78b1f] mt-2">
+                      담은 상품 {cartCount}개
+                    </p>
                   </div>
                 </div>
               </Link>
@@ -196,7 +244,9 @@ export default function AccountPage() {
                   <div className="flex-1">
                     <h3 className="font-bold mb-1">배송지 관리</h3>
                     <p className="text-sm text-gray-600">배송지를 관리하세요</p>
-                    <p className="text-xs text-[#b78b1f] mt-2">등록된 주소 {addressCount}개</p>
+                    <p className="text-xs text-[#b78b1f] mt-2">
+                      등록된 주소 {addressCount}개
+                    </p>
                   </div>
                 </div>
               </Link>
@@ -212,7 +262,9 @@ export default function AccountPage() {
                   </div>
                   <div className="flex-1">
                     <h3 className="font-bold mb-1">계정 설정</h3>
-                    <p className="text-sm text-gray-600">회원 정보를 수정하세요</p>
+                    <p className="text-sm text-gray-600">
+                      회원 정보를 수정하세요
+                    </p>
                   </div>
                 </div>
               </Link>
@@ -224,28 +276,38 @@ export default function AccountPage() {
               {recentOrders.length > 0 ? (
                 <div className="space-y-4">
                   {recentOrders.map((order) => {
-                    const firstItem = order.items[0];
+                    const items = order.items || [];
+                    const firstItem = items[0];
                     return (
-                      <div key={order.id} className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg">
+                      <div
+                        key={order.id}
+                        className="flex items-center gap-4 p-4 bg-gray-50 rounded-lg"
+                      >
                         <div className="w-16 h-16 bg-gray-200 rounded flex-shrink-0 overflow-hidden">
                           {firstItem?.image && (
-                            <img 
-                              src={firstItem.image} 
-                              alt={firstItem.name}
+                            <img
+                              src={firstItem.image}
+                              alt={firstItem?.name || "상품"}
                               className="w-full h-full object-cover"
                             />
                           )}
                         </div>
                         <div className="flex-1">
                           <p className="font-bold text-sm mb-1">
-                            {firstItem?.name}
-                            {order.items.length > 1 && ` 외 ${order.items.length - 1}개`}
+                            {firstItem?.name || "상품명 없음"}
+                            {items.length > 1 && ` 외 ${items.length - 1}개`}
                           </p>
-                          <p className="text-xs text-gray-500">{order.date} 주문</p>
-                          <p className="text-xs text-[#b78b1f] mt-1">{order.status}</p>
+                          <p className="text-xs text-gray-500">
+                            {order.date || "날짜 없음"} 주문
+                          </p>
+                          <p className="text-xs text-[#b78b1f] mt-1">
+                            {order.shippingStatus || order.status || "주문접수"}
+                          </p>
                         </div>
                         <div className="text-right">
-                          <p className="font-bold">{order.totalAmount.toLocaleString()}원</p>
+                          <p className="font-bold">
+                            {(order.totalAmount ?? 0).toLocaleString()}원
+                          </p>
                         </div>
                       </div>
                     );

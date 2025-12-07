@@ -1,10 +1,23 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-dom";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  Navigate,
+  useLocation,
+} from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
-import { CartProvider } from "./context/CartContext";
+import { CartProvider, useCart } from "./context/CartContext";
 import { AuthProvider } from "./context/AuthContext";
-import { Header, Navigation, Footer, MobileBottomNav } from "./components/Layout";
+import { flushPendingUpdates } from "./data/cart";
+import {
+  Header,
+  Navigation,
+  Footer,
+  MobileBottomNav,
+} from "./components/Layout";
 import { ScrollToTop } from "./components/ScrollToTop";
-import { Toaster } from "sonner@2.0.3";
+import { Toaster } from "sonner";
+import { AdminNotification } from "./components/AdminNotification";
 
 // Lazy load pages for better performance
 const MainPage = lazy(() => import("./pages/MainPage"));
@@ -41,21 +54,45 @@ function LoadingFallback() {
   );
 }
 
+// 🔥 페이지 이동 감지 → 대기 중인 장바구니 업데이트 즉시 플러시
+function NavigationFlush() {
+  const location = useLocation();
+  const { refreshCart } = useCart();
+
+  useEffect(() => {
+    // 페이지 이동할 때마다 대기 중인 장바구니 업데이트 즉시 실행
+    console.log("🔄 페이지 이동 감지 - 장바구니 플러시");
+    flushPendingUpdates();
+
+    // 장바구니 페이지 진입 시 서버에서 최신 데이터 동기화
+    if (location.pathname === "/cart" || location.pathname === "/checkout") {
+      refreshCart();
+    }
+  }, [location.pathname, refreshCart]);
+
+  return null;
+}
+
 export default function App() {
   // Suppress all unhandled promise rejections and fetch errors globally
   useEffect(() => {
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
       // Suppress "Failed to fetch" and Auth errors silently
-      if (event.reason?.message?.includes('Failed to fetch') || 
-          event.reason?.message?.includes('AuthRetryableFetchError')) {
+      if (
+        event.reason?.message?.includes("Failed to fetch") ||
+        event.reason?.message?.includes("AuthRetryableFetchError")
+      ) {
         event.preventDefault();
         // Don't log to console to keep it clean
       }
     };
 
-    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    window.addEventListener("unhandledrejection", handleUnhandledRejection);
     return () => {
-      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+      window.removeEventListener(
+        "unhandledrejection",
+        handleUnhandledRejection
+      );
     };
   }, []);
 
@@ -63,6 +100,7 @@ export default function App() {
     <AuthProvider>
       <CartProvider>
         <Router>
+          <NavigationFlush /> {/* 🔥 페이지 이동 시 장바구니 자동 플러시 */}
           <ScrollToTop />
           <div className="bg-white min-h-screen pb-16 lg:pb-0">
             {/* Sticky Header + Navigation Container */}
@@ -78,7 +116,10 @@ export default function App() {
                 <Route path="/signup" element={<SignupPage />} />
                 <Route path="/cart" element={<CartPage />} />
                 <Route path="/category/:category" element={<CategoryPage />} />
-                <Route path="/customer-service" element={<CustomerServicePage />} />
+                <Route
+                  path="/customer-service"
+                  element={<CustomerServicePage />}
+                />
                 <Route path="/account" element={<AccountPage />} />
                 <Route path="/product/:id" element={<ProductDetailPage />} />
                 <Route path="/search" element={<SearchResultsPage />} />
@@ -99,6 +140,8 @@ export default function App() {
             <Footer />
             <MobileBottomNav />
             <Toaster position="top-center" richColors />
+            {/* 관리자 알림 시스템 - 모든 페이지에서 작동 */}
+            <AdminNotification />
           </div>
         </Router>
       </CartProvider>

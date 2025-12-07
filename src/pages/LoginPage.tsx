@@ -1,11 +1,24 @@
 import { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { login, isLoggedIn } = useAuth();
+
+  // 🔥 세션 만료/비밀번호 변경 등의 이유로 리다이렉트된 경우 메시지 표시
+  useEffect(() => {
+    const reason = searchParams.get("reason");
+    if (reason === "session_expired") {
+      toast.error("세션이 만료되었습니다. 다시 로그인해주세요.");
+    } else if (reason === "password_changed") {
+      toast.info("비밀번호가 변경되었습니다. 새 비밀번호로 로그인해주세요.");
+    } else if (reason === "timeout") {
+      toast.info("장시간 미활동으로 로그아웃되었습니다.");
+    }
+  }, [searchParams]);
 
   // 이미 로그인된 상태면 홈으로 리다이렉트 (마운트 시에만 체크)
   useEffect(() => {
@@ -18,66 +31,60 @@ export default function LoginPage() {
 
   const [formData, setFormData] = useState({
     email: "",
-    password: ""
+    password: "",
   });
 
   const [errors, setErrors] = useState({
     email: "",
-    password: ""
+    password: "",
   });
-  
+
   const [isLoading, setIsLoading] = useState(false);
 
   const validateEmail = (email: string): string => {
     if (!email.trim()) return "이메일을 입력해주세요";
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "올바른 이메일 형식이 아닙니다";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      return "올바른 이메일 형식이 아닙니다";
     return "";
   };
 
   const validatePassword = (password: string): string => {
     if (!password) return "비밀번호를 입력해주세요";
-    if (password.length < 8) return "비밀번호는 8자 이상이어야 합니다";
+    // 로그인 시에는 비밀번호 규칙 검증하지 않음 (기존 비밀번호 허용)
     return "";
   };
 
   const handleChange = (field: string, value: string) => {
     setFormData({ ...formData, [field]: value });
-    
+
     // Real-time validation
     let error = "";
     if (field === "email") error = validateEmail(value);
     else if (field === "password") error = validatePassword(value);
-    
+
     setErrors({ ...errors, [field]: error });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    console.log('🔐 LoginPage: handleSubmit called');
-    
+
     // Validate all fields
     const validationErrors = {
       email: validateEmail(formData.email),
-      password: validatePassword(formData.password)
+      password: validatePassword(formData.password),
     };
-    
+
     setErrors(validationErrors);
-    
+
     if (validationErrors.email || validationErrors.password) {
-      console.log('❌ LoginPage: Validation failed', validationErrors);
       return;
     }
-
-    console.log('✅ LoginPage: Validation passed, calling login...');
     setIsLoading(true);
 
     try {
       // Supabase 로그인
       const result = await login(formData.email.trim(), formData.password);
-      
-      console.log('📊 LoginPage: Login result:', result);
-      
+
       if (result.success) {
         toast.success("로그인 성공!");
         navigate("/");
@@ -85,7 +92,6 @@ export default function LoginPage() {
         toast.error(result.message || "로그인 실패");
       }
     } catch (error) {
-      console.error('Login error:', error);
       toast.error("로그인 중 오류가 발생했습니다.");
     } finally {
       setIsLoading(false);
@@ -119,7 +125,9 @@ export default function LoginPage() {
               placeholder="이메일을 입력하세요"
               required
             />
-            {errors.email && <p className="text-red-500 text-sm">{errors.email}</p>}
+            {errors.email && (
+              <p className="text-red-500 text-sm">{errors.email}</p>
+            )}
           </div>
 
           <div>
@@ -129,13 +137,16 @@ export default function LoginPage() {
             <input
               type="password"
               id="password"
+              autoComplete="current-password"
               value={formData.password}
               onChange={(e) => handleChange("password", e.target.value)}
               className="w-full bg-[#eeeeee] rounded border border-[#eeeeee] px-4 py-3 text-sm outline-none focus:border-black"
               placeholder="비밀번호를 입력하세요"
               required
             />
-            {errors.password && <p className="text-red-500 text-sm">{errors.password}</p>}
+            {errors.password && (
+              <p className="text-red-500 text-sm">{errors.password}</p>
+            )}
           </div>
 
           <div className="flex items-center">
@@ -147,14 +158,18 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            className="w-full bg-black text-white rounded-[10px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)] py-4 font-bold tracking-wider uppercase text-center hover:bg-gray-800"
+            className="w-full bg-black text-white rounded-[10px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)] py-4 font-bold tracking-wider uppercase text-center hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={isLoading}
           >
-            로그인
+            {isLoading ? "로그인 중..." : "로그인"}
           </button>
 
           <div className="text-center">
             <span className="text-sm text-gray-600">계정이 없으신가요? </span>
-            <Link to="/signup" className="text-sm text-[#b78b1f] font-bold hover:underline">
+            <Link
+              to="/signup"
+              className="text-sm text-[#b78b1f] font-bold hover:underline"
+            >
               회원가입
             </Link>
           </div>

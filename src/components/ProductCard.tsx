@@ -1,14 +1,13 @@
-import svgPaths from "../imports/svg-gomaw2gej1";
 import { MessageCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useState, useEffect, useMemo, useCallback, memo } from "react";
+import { useMemo, useCallback, memo, useRef, useState } from "react";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
-import { toast } from "sonner@2.0.3";
-import { projectId, publicAnonKey } from "../utils/supabase/info";
-import { ImageWithFallback } from "./figma/ImageWithFallback";
+import { toast } from "sonner";
+import { ImageWithFallback } from "./common/ImageWithFallback";
 
-const img1 = "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400";
+const img1 =
+  "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400";
 
 // Cart Icon Component
 const CartIcon = () => (
@@ -65,35 +64,29 @@ interface ProductCardProps {
   originalPrice?: number;
   images?: string[];
   discount?: number;
+  reviewCount?: number;
+  rating?: number;
 }
 
-const ProductCardComponent = ({ 
-  hasDiscount = false, 
+const ProductCardComponent = ({
+  hasDiscount = false,
   id = 1,
   name = "Apple 아이폰 17 Pro 자급제 Apple",
   price = 1500000,
   originalPrice = 1750000,
   images,
-  discount
+  discount,
+  reviewCount = 0,
 }: ProductCardProps) => {
   const navigate = useNavigate();
   const { addToCart } = useCart();
   const { isLoggedIn } = useAuth();
-  const [reviewCount, setReviewCount] = useState(0);
-  
-  // Supabase에서 리뷰 개수 가져오기 - Disabled to prevent fetch errors
-  // Reviews will be loaded only on product detail page
-  useEffect(() => {
-    // Don't fetch review count to avoid failed fetch errors
-    // Use default reviewCount from product data instead
-    setReviewCount(0);
-  }, [id]);
 
   // 이미지 URL - useMemo로 최적화
   const productImage = useMemo(() => {
     return images && images.length > 0 ? images[0] : img1;
   }, [images]);
-  
+
   // 할인율 계산 - useMemo로 최적화
   const discountPercentage = useMemo(() => {
     if (discount) return discount;
@@ -103,33 +96,61 @@ const ProductCardComponent = ({
     return 0;
   }, [discount, hasDiscount, originalPrice, price]);
 
-  const handleAddToCart = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    
-    if (!isLoggedIn) {
-      toast.error("로그인이 필요합니다", {
-        description: "로그인 페이지로 이동합니다.",
+  // 🔥 클릭 쓰로틀링용 ref
+  const lastClickRef = useRef<number>(0);
+  const [isAdding, setIsAdding] = useState(false);
+
+  const handleAddToCart = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+
+      // 🔥 쓰로틀링: 500ms 내 중복 클릭 방지
+      const now = Date.now();
+      if (now - lastClickRef.current < 500) {
+        console.log("⏳ 쓰로틀링: 너무 빠른 클릭");
+        return;
+      }
+      lastClickRef.current = now;
+
+      if (!isLoggedIn) {
+        toast.error("로그인이 필요합니다", {
+          description: "로그인 페이지로 이동합니다.",
+          duration: 2000,
+        });
+        setTimeout(() => {
+          navigate("/login");
+        }, 1000);
+        return;
+      }
+
+      // 🔥 이미 추가 중이면 무시
+      if (isAdding) return;
+      setIsAdding(true);
+
+      // 즉시 토스트 표시
+      toast.success("장바구니에 추가되었습니다!", {
+        description: "장바구니에서 확인하실 수 있습니다.",
         duration: 2000,
       });
-      setTimeout(() => {
-        navigate("/login");
-      }, 1000);
-      return;
-    }
 
-    addToCart(
+      try {
+        await addToCart(id, name, price, originalPrice, productImage, 1);
+      } finally {
+        setIsAdding(false);
+      }
+    },
+    [
+      isLoggedIn,
+      navigate,
+      addToCart,
       id,
       name,
       price,
       originalPrice,
       productImage,
-      1
-    );
-    toast.success("장바구니에 추가되었습니다!", {
-      description: "장바구니에서 확인하실 수 있습니다.",
-      duration: 3000,
-    });
-  }, [isLoggedIn, navigate, addToCart, id, name, price, originalPrice, productImage]);
+      isAdding,
+    ]
+  );
 
   const handleProductClick = useCallback(() => {
     navigate(`/product/${id}`);
@@ -138,7 +159,7 @@ const ProductCardComponent = ({
   return (
     <div className="flex flex-col gap-2.5 w-full">
       {/* Product Image */}
-      <div 
+      <div
         className="relative rounded-[10px] shadow-[0px_2px_4px_0px_rgba(0,0,0,0.25)] bg-gradient-to-b from-white to-[#e8e7e7] aspect-[252/227] overflow-hidden cursor-pointer group"
         onClick={handleProductClick}
       >
@@ -165,7 +186,7 @@ const ProductCardComponent = ({
       </div>
 
       {/* Product Info */}
-      <div 
+      <div
         className="bg-gradient-to-r from-[#efefef] to-[#e8e8e8] rounded-[10px] shadow-[0px_2px_4px_0px_rgba(0,0,0,0.25)] p-2 text-center cursor-pointer"
         onClick={handleProductClick}
       >
@@ -192,17 +213,24 @@ const ProductCardComponent = ({
 
       {/* Action Buttons */}
       <div className="flex items-center justify-between gap-2">
-        <button 
+        <button
           onClick={handleProductClick}
           className="flex-1 flex items-center justify-center bg-black text-white rounded-[10px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)] py-3 text-xs lg:text-[13px] font-['NanumSquareOTF_ac'] font-bold tracking-wider uppercase"
         >
           바로 구매하기
         </button>
-        <button 
+        <button
           onClick={handleAddToCart}
-          className="bg-white border border-black rounded-full p-1.5 shadow-[0px_2px_2px_0px_rgba(0,0,0,0.3)] hover:bg-gray-50"
+          disabled={isAdding}
+          className={`bg-white border border-black rounded-full p-1.5 shadow-[0px_2px_2px_0px_rgba(0,0,0,0.3)] hover:bg-gray-50 transition-opacity ${
+            isAdding ? "opacity-50 cursor-not-allowed" : ""
+          }`}
         >
-          <CartIcon />
+          {isAdding ? (
+            <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <CartIcon />
+          )}
         </button>
       </div>
     </div>

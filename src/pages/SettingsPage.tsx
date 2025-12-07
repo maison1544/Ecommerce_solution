@@ -2,76 +2,130 @@ import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { User, Lock, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
-import { toast } from "sonner@2.0.3";
+import { toast } from "sonner";
+import { createClient } from "../utils/supabase/client";
+import { API_BASE_URL } from "../utils/api";
+import { formatPhoneNumber } from "../utils/phoneFormat";
 
 export default function SettingsPage() {
   const navigate = useNavigate();
-  const { isLoggedIn, currentUser } = useAuth();
+  const { isLoggedIn, currentUser, getAccessToken, isAuthLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<"profile" | "password">("profile");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const supabase = createClient();
 
   // 로그인 체크
   useEffect(() => {
+    // 세션 로딩 중이면 체크하지 않음
+    if (isAuthLoading) return;
+
     if (!isLoggedIn || !currentUser) {
       toast.error("로그인이 필요합니다");
       navigate("/login");
     }
-  }, [isLoggedIn, currentUser, navigate]);
+  }, [isLoggedIn, currentUser, navigate, isAuthLoading]);
+
+  // 로딩 중이면 로딩 표시
+  if (isAuthLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#b78b1f]"></div>
+      </div>
+    );
+  }
 
   if (!currentUser) {
     return null;
   }
-  
+
   // Profile Form
   const [profileForm, setProfileForm] = useState({
-    name: currentUser.name,
-    email: currentUser.email,
-    phone: currentUser.phone,
-    birthDate: currentUser.birthDate || ""
+    name: currentUser.name || "",
+    email: currentUser.email || "",
+    phone: currentUser.phone || "",
   });
 
   const [profileErrors, setProfileErrors] = useState({
     name: "",
     email: "",
-    phone: ""
+    phone: "",
   });
 
   // Password Form
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
     newPassword: "",
-    confirmPassword: ""
+    confirmPassword: "",
   });
 
   const [passwordErrors, setPasswordErrors] = useState({
     currentPassword: "",
     newPassword: "",
-    confirmPassword: ""
+    confirmPassword: "",
   });
 
   const [showPassword, setShowPassword] = useState({
     current: false,
     new: false,
-    confirm: false
+    confirm: false,
   });
 
   // Validation functions
   const validateName = (name: string): string => {
     if (!name.trim()) return "이름을 입력해주세요";
     if (name.length < 2) return "이름은 2자 이상이어야 합니다";
-    if (!/^[가-힣a-zA-Z\s]+$/.test(name)) return "이름은 한글 또는 영문만 가능합니다";
+    if (!/^[가-힣a-zA-Z\s]+$/.test(name))
+      return "이름은 한글 또는 영문만 가능합니다";
     return "";
   };
 
   const validateEmail = (email: string): string => {
     if (!email.trim()) return "이메일을 입력해주세요";
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "올바른 이메일 형식이 아닙니다";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      return "올바른 이메일 형식이 아닙니다";
     return "";
   };
 
   const validatePhone = (phone: string): string => {
     if (!phone.trim()) return "전화번호를 입력해주세요";
-    if (!/^01[0-9]-\d{4}-\d{4}$/.test(phone)) return "010-0000-0000 형식으로 입력해주세요";
+    if (!/^01[0-9]-\d{4}-\d{4}$/.test(phone))
+      return "010-0000-0000 형식으로 입력해주세요";
     return "";
+  };
+
+  // 이메일 중복 확인
+  const checkEmailDuplicate = async (email: string): Promise<boolean> => {
+    // 현재 사용자의 이메일과 같으면 확인 불필요
+    if (email === currentUser.email) {
+      return false;
+    }
+
+    if (!email || validateEmail(email)) {
+      return false;
+    }
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/auth/check-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.exists) {
+          setProfileErrors((prev) => ({
+            ...prev,
+            email: data.message || "이미 사용 중인 이메일입니다",
+          }));
+          return true; // 중복됨
+        }
+      }
+      return false; // 중복 아님
+    } catch (error) {
+      console.error("Email check failed:", error);
+      return false;
+    }
   };
 
   const validatePassword = (password: string): string => {
@@ -85,94 +139,148 @@ export default function SettingsPage() {
 
   const handleProfileChange = (field: string, value: string) => {
     setProfileForm({ ...profileForm, [field]: value });
-    
+
     // Real-time validation
     let error = "";
     if (field === "name") error = validateName(value);
     else if (field === "email") error = validateEmail(value);
     else if (field === "phone") error = validatePhone(value);
-    
+
     setProfileErrors({ ...profileErrors, [field]: error });
   };
 
   const handlePasswordChange = (field: string, value: string) => {
     setPasswordForm({ ...passwordForm, [field]: value });
-    
+
     // Real-time validation
     let error = "";
     if (field === "newPassword") {
       error = validatePassword(value);
     } else if (field === "confirmPassword") {
-      error = value !== passwordForm.newPassword ? "비밀번호가 일치하지 않습니다" : "";
+      error =
+        value !== passwordForm.newPassword
+          ? "비밀번호가 일치하지 않습니다"
+          : "";
     }
-    
+
     setPasswordErrors({ ...passwordErrors, [field]: error });
   };
 
-  const handleProfileSave = (e: React.FormEvent) => {
+  const handleProfileSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
+    if (isSubmitting) return;
+
     // Validate all fields
     const errors = {
       name: validateName(profileForm.name),
       email: validateEmail(profileForm.email),
-      phone: validatePhone(profileForm.phone)
+      phone: validatePhone(profileForm.phone),
     };
-    
+
     setProfileErrors(errors);
-    
+
     if (errors.name || errors.email || errors.phone) {
       return;
     }
 
-    // SQL로 전달할 데이터
-    const profileData = {
-      name: profileForm.name.trim(),
-      email: profileForm.email.trim(),
-      phone: profileForm.phone.trim(),
-      birthDate: profileForm.birthDate
-    };
-    
-    console.log("프로필 업데이트 데이터:", profileData);
-    // TODO: SQL INSERT/UPDATE 쿼리 실행
-    alert("프로필이 업데이트되었습니다!");
+    // 이메일이 변경된 경우 중복 확인
+    if (profileForm.email !== currentUser.email) {
+      const isDuplicate = await checkEmailDuplicate(profileForm.email);
+      if (isDuplicate) {
+        toast.error("이미 사용 중인 이메일입니다");
+        return;
+      }
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        toast.error("인증 정보가 없습니다");
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Supabase Auth의 user metadata 업데이트
+      const { error: updateError } = await supabase.auth.updateUser({
+        data: {
+          name: profileForm.name.trim(),
+          phone: profileForm.phone.trim(),
+        },
+      });
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      toast.success("프로필이 업데이트되었습니다! 다시 로그인해주세요.");
+
+      // 세션 종료 및 로그인 페이지로 리다이렉트
+      setTimeout(async () => {
+        await supabase.auth.signOut();
+        window.location.href = "/login";
+      }, 1500);
+    } catch (error) {
+      console.error("Profile update error:", error);
+      toast.error("프로필 업데이트에 실패했습니다");
+      setIsSubmitting(false);
+    }
   };
 
-  const handlePasswordSubmit = (e: React.FormEvent) => {
+  const handlePasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
+    if (isSubmitting) return;
+
     // Validate all fields
     const errors = {
-      currentPassword: !passwordForm.currentPassword ? "현재 비밀번호를 입력해주세요" : "",
+      currentPassword: !passwordForm.currentPassword
+        ? "현재 비밀번호를 입력해주세요"
+        : "",
       newPassword: validatePassword(passwordForm.newPassword),
-      confirmPassword: passwordForm.newPassword !== passwordForm.confirmPassword ? "비밀번호가 일치하지 않습니다" : ""
+      confirmPassword:
+        passwordForm.newPassword !== passwordForm.confirmPassword
+          ? "비밀번호가 일치하지 않습니다"
+          : "",
     };
-    
+
     setPasswordErrors(errors);
-    
-    if (errors.currentPassword || errors.newPassword || errors.confirmPassword) {
+
+    if (
+      errors.currentPassword ||
+      errors.newPassword ||
+      errors.confirmPassword
+    ) {
       return;
     }
 
-    // SQL로 전달할 데이터
-    const passwordData = {
-      currentPassword: passwordForm.currentPassword,
-      newPassword: passwordForm.newPassword
-    };
-    
-    console.log("비밀번호 변경 데이터:", passwordData);
-    // TODO: SQL UPDATE 쿼리 실행
-    alert("비밀번호가 변경되었습니다!");
-    setPasswordForm({
-      currentPassword: "",
-      newPassword: "",
-      confirmPassword: ""
-    });
-    setPasswordErrors({
-      currentPassword: "",
-      newPassword: "",
-      confirmPassword: ""
-    });
+    setIsSubmitting(true);
+
+    try {
+      // Supabase는 현재 세션이 있으면 비밀번호를 직접 변경할 수 있음
+      // 재인증 없이 바로 업데이트 (보안상 현재 비밀번호 확인은 백엔드에서 처리해야 함)
+      const { error: updateError } = await supabase.auth.updateUser({
+        password: passwordForm.newPassword,
+      });
+
+      if (updateError) {
+        throw updateError;
+      }
+
+      toast.success("비밀번호가 변경되었습니다! 다시 로그인해주세요.");
+
+      // 세션 종료 및 로그인 페이지로 리다이렉트
+      setTimeout(async () => {
+        await supabase.auth.signOut();
+        window.location.href = "/login";
+      }, 1500);
+    } catch (error) {
+      console.error("Password update error:", error);
+      toast.error("비밀번호 변경에 실패했습니다");
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -237,7 +345,9 @@ export default function SettingsPage() {
                   required
                 />
                 {profileErrors.name && (
-                  <p className="text-red-500 text-xs mt-1">{profileErrors.name}</p>
+                  <p className="text-red-500 text-xs mt-1">
+                    {profileErrors.name}
+                  </p>
                 )}
               </div>
 
@@ -255,7 +365,9 @@ export default function SettingsPage() {
                   required
                 />
                 {profileErrors.email && (
-                  <p className="text-red-500 text-xs mt-1">{profileErrors.email}</p>
+                  <p className="text-red-500 text-xs mt-1">
+                    {profileErrors.email}
+                  </p>
                 )}
               </div>
 
@@ -266,33 +378,36 @@ export default function SettingsPage() {
                 <input
                   type="tel"
                   value={profileForm.phone}
-                  onChange={(e) => handleProfileChange("phone", e.target.value)}
+                  onChange={(e) =>
+                    handleProfileChange(
+                      "phone",
+                      formatPhoneNumber(e.target.value)
+                    )
+                  }
                   className={`w-full bg-[#eeeeee] rounded border px-4 py-3 text-sm outline-none focus:border-black ${
                     profileErrors.phone ? "border-red-500" : "border-[#eeeeee]"
                   }`}
-                  placeholder="010-0000-0000"
+                  placeholder="숫자만 입력"
+                  maxLength={13}
                   required
                 />
                 {profileErrors.phone && (
-                  <p className="text-red-500 text-xs mt-1">{profileErrors.phone}</p>
+                  <p className="text-red-500 text-xs mt-1">
+                    {profileErrors.phone}
+                  </p>
                 )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-bold mb-2">생년월일</label>
-                <input
-                  type="date"
-                  value={profileForm.birthDate}
-                  onChange={(e) => setProfileForm({ ...profileForm, birthDate: e.target.value })}
-                  className="w-full bg-[#eeeeee] rounded border border-[#eeeeee] px-4 py-3 text-sm outline-none focus:border-black"
-                />
               </div>
 
               <button
                 type="submit"
-                className="w-full flex items-center justify-center bg-black text-white rounded-[10px] py-4 font-bold tracking-wider uppercase hover:bg-gray-800"
+                disabled={isSubmitting}
+                className={`w-full flex items-center justify-center rounded-[10px] py-4 font-bold tracking-wider uppercase ${
+                  isSubmitting
+                    ? "bg-gray-400 text-white cursor-not-allowed"
+                    : "bg-black text-white hover:bg-gray-800"
+                }`}
               >
-                프로필 저장
+                {isSubmitting ? "저장 중..." : "프로필 저장"}
               </button>
             </form>
           )}
@@ -309,22 +424,37 @@ export default function SettingsPage() {
                   <input
                     type={showPassword.current ? "text" : "password"}
                     value={passwordForm.currentPassword}
-                    onChange={(e) => handlePasswordChange("currentPassword", e.target.value)}
+                    onChange={(e) =>
+                      handlePasswordChange("currentPassword", e.target.value)
+                    }
                     className={`w-full bg-[#eeeeee] rounded border px-4 py-3 text-sm outline-none focus:border-black pr-12 ${
-                      passwordErrors.currentPassword ? "border-red-500" : "border-[#eeeeee]"
+                      passwordErrors.currentPassword
+                        ? "border-red-500"
+                        : "border-[#eeeeee]"
                     }`}
                     required
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPassword({ ...showPassword, current: !showPassword.current })}
+                    onClick={() =>
+                      setShowPassword({
+                        ...showPassword,
+                        current: !showPassword.current,
+                      })
+                    }
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600"
                   >
-                    {showPassword.current ? <EyeOff size={18} /> : <Eye size={18} />}
+                    {showPassword.current ? (
+                      <EyeOff size={18} />
+                    ) : (
+                      <Eye size={18} />
+                    )}
                   </button>
                 </div>
                 {passwordErrors.currentPassword && (
-                  <p className="text-red-500 text-xs mt-1">{passwordErrors.currentPassword}</p>
+                  <p className="text-red-500 text-xs mt-1">
+                    {passwordErrors.currentPassword}
+                  </p>
                 )}
               </div>
 
@@ -336,24 +466,41 @@ export default function SettingsPage() {
                   <input
                     type={showPassword.new ? "text" : "password"}
                     value={passwordForm.newPassword}
-                    onChange={(e) => handlePasswordChange("newPassword", e.target.value)}
+                    onChange={(e) =>
+                      handlePasswordChange("newPassword", e.target.value)
+                    }
                     className={`w-full bg-[#eeeeee] rounded border px-4 py-3 text-sm outline-none focus:border-black pr-12 ${
-                      passwordErrors.newPassword ? "border-red-500" : "border-[#eeeeee]"
+                      passwordErrors.newPassword
+                        ? "border-red-500"
+                        : "border-[#eeeeee]"
                     }`}
                     required
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPassword({ ...showPassword, new: !showPassword.new })}
+                    onClick={() =>
+                      setShowPassword({
+                        ...showPassword,
+                        new: !showPassword.new,
+                      })
+                    }
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600"
                   >
-                    {showPassword.new ? <EyeOff size={18} /> : <Eye size={18} />}
+                    {showPassword.new ? (
+                      <EyeOff size={18} />
+                    ) : (
+                      <Eye size={18} />
+                    )}
                   </button>
                 </div>
                 {passwordErrors.newPassword && (
-                  <p className="text-red-500 text-xs mt-1">{passwordErrors.newPassword}</p>
+                  <p className="text-red-500 text-xs mt-1">
+                    {passwordErrors.newPassword}
+                  </p>
                 )}
-                <p className="text-xs text-gray-500 mt-1">8자 이상, 영문 대소문자와 숫자 포함</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  8자 이상, 영문 대소문자와 숫자 포함
+                </p>
               </div>
 
               <div>
@@ -364,30 +511,50 @@ export default function SettingsPage() {
                   <input
                     type={showPassword.confirm ? "text" : "password"}
                     value={passwordForm.confirmPassword}
-                    onChange={(e) => handlePasswordChange("confirmPassword", e.target.value)}
+                    onChange={(e) =>
+                      handlePasswordChange("confirmPassword", e.target.value)
+                    }
                     className={`w-full bg-[#eeeeee] rounded border px-4 py-3 text-sm outline-none focus:border-black pr-12 ${
-                      passwordErrors.confirmPassword ? "border-red-500" : "border-[#eeeeee]"
+                      passwordErrors.confirmPassword
+                        ? "border-red-500"
+                        : "border-[#eeeeee]"
                     }`}
                     required
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPassword({ ...showPassword, confirm: !showPassword.confirm })}
+                    onClick={() =>
+                      setShowPassword({
+                        ...showPassword,
+                        confirm: !showPassword.confirm,
+                      })
+                    }
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600"
                   >
-                    {showPassword.confirm ? <EyeOff size={18} /> : <Eye size={18} />}
+                    {showPassword.confirm ? (
+                      <EyeOff size={18} />
+                    ) : (
+                      <Eye size={18} />
+                    )}
                   </button>
                 </div>
                 {passwordErrors.confirmPassword && (
-                  <p className="text-red-500 text-xs mt-1">{passwordErrors.confirmPassword}</p>
+                  <p className="text-red-500 text-xs mt-1">
+                    {passwordErrors.confirmPassword}
+                  </p>
                 )}
               </div>
 
               <button
                 type="submit"
-                className="w-full flex items-center justify-center bg-black text-white rounded-[10px] py-4 font-bold tracking-wider uppercase hover:bg-gray-800"
+                disabled={isSubmitting}
+                className={`w-full flex items-center justify-center rounded-[10px] py-4 font-bold tracking-wider uppercase ${
+                  isSubmitting
+                    ? "bg-gray-400 text-white cursor-not-allowed"
+                    : "bg-black text-white hover:bg-gray-800"
+                }`}
               >
-                비밀번호 변경
+                {isSubmitting ? "변경 중..." : "비밀번호 변경"}
               </button>
             </form>
           )}

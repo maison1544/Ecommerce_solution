@@ -1,36 +1,54 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Star, MessageCircle, ThumbsUp, Minus, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import {
+  Star,
+  MessageCircle,
+  ThumbsUp,
+  Minus,
+  Plus,
+  ShoppingCart,
+  Trash2,
+} from "lucide-react";
 import { useCart } from "../context/CartContext";
 import { useAuth } from "../context/AuthContext";
-import { projectId, publicAnonKey } from "../utils/supabase/info";
-import { toast } from "sonner@2.0.3";
-import { ImageWithFallback } from "../components/figma/ImageWithFallback";
+import { API_BASE_URL } from "../utils/api";
+import { toast } from "sonner";
+import { ImageWithFallback } from "../components/common/ImageWithFallback";
 import { products } from "../data/products";
 
-const img1 = "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400";
+const img1 =
+  "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400";
 
 // Type definitions
 interface Product {
   id: number;
   name: string;
   price: number;
-  originalPrice: number;
-  images: string[];
+  originalPrice?: number;
+  images?: string[];
   category: string;
   description?: string;
   hasDiscount?: boolean;
   discount?: number;
+  rating?: number;
+  reviewCount?: number;
+  specs?: string[];
+  isActive?: boolean;
 }
 
 interface Review {
-  id: number;
+  id: string; // reviewId format: ${Date.now()}_${userId}
   productId: number;
+  userId: string; // 작성자 ID
   author: string;
   rating: number;
   date: string;
   content: string;
   likes: number;
+  helpful?: number; // helpfulCount
+  helpfulCount?: number;
+  images?: string[];
+  isHelpful?: boolean; // 현재 사용자가 도움이 돼요를 눌렀는지
 }
 
 export default function ProductDetailPage() {
@@ -38,10 +56,12 @@ export default function ProductDetailPage() {
   const navigate = useNavigate();
   const { addToCart } = useCart();
   const { isLoggedIn, currentUser, getAccessToken } = useAuth();
-  
+
   // ⚠️ ALL HOOKS MUST BE AT THE TOP - BEFORE ANY CONDITIONAL RETURNS
   const [quantity, setQuantity] = useState(1);
-  const [selectedTab, setSelectedTab] = useState<"details" | "reviews">("details");
+  const [selectedTab, setSelectedTab] = useState<"details" | "reviews">(
+    "details"
+  );
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [isLoadingReviews, setIsLoadingReviews] = useState(false);
   const [product, setProduct] = useState<Product | null>(null);
@@ -49,24 +69,55 @@ export default function ProductDetailPage() {
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [newReview, setNewReview] = useState({
     rating: 5,
-    content: ""
+    content: "",
   });
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [isHelpfulProcessing, setIsHelpfulProcessing] = useState<Set<string>>(
+    new Set()
+  );
 
   // 상품 데이터 API에서 가져오기
   useEffect(() => {
-    const loadProduct = () => {
+    const loadProduct = async () => {
       setIsLoadingProduct(true);
-      // Use local products data instead of API
-      const foundProduct = products.find((p: Product) => p.id === Number(id));
-      
-      if (!foundProduct) {
-        console.error('Product not found, redirecting to home');
-        navigate("/");
-        return;
-      }
+      try {
+        // API에서 상품 로드
+        const API_BASE = `${API_BASE_URL}`;
+        const response = await fetch(`${API_BASE}/api/products`);
 
-      setProduct(foundProduct);
+        let allProducts = products;
+        if (response.ok) {
+          const data = await response.json();
+          const apiProducts = data.products || [];
+          const allProductsList = [...products, ...apiProducts];
+          const uniqueProducts = allProductsList.filter(
+            (product, index, self) =>
+              index === self.findIndex((p) => p.id === product.id)
+          );
+          allProducts = uniqueProducts;
+        }
+
+        const foundProduct = allProducts.find(
+          (p: Product) => p.id === Number(id)
+        );
+
+        if (!foundProduct) {
+          console.error("Product not found, redirecting to home");
+          navigate("/");
+          return;
+        }
+
+        setProduct(foundProduct);
+      } catch (error) {
+        console.error("Failed to load product:", error);
+        // Fallback to local data
+        const foundProduct = products.find((p: Product) => p.id === Number(id));
+        if (foundProduct) {
+          setProduct(foundProduct);
+        } else {
+          navigate("/");
+        }
+      }
       setIsLoadingProduct(false);
     };
 
@@ -80,22 +131,79 @@ export default function ProductDetailPage() {
     setSelectedImageIndex(0);
   }, [id]);
 
-  // Supabase에서 후기 로드 - DISABLED to prevent fetch errors
+  // Supabase에서 후기 로드
   useEffect(() => {
-    // Don't fetch reviews automatically to avoid failed fetch errors
-    // Reviews will be empty by default, can be loaded when backend is ready
-    setReviews([]);
-    setIsLoadingReviews(false);
-  }, [id]);
+    const loadReviews = async () => {
+      if (!id) return;
+
+      setIsLoadingReviews(true);
+      try {
+        const token = await getAccessToken();
+        if (!token) {
+          setReviews([]);
+          setIsLoadingReviews(false);
+          return;
+        }
+
+        const response = await fetch(`${API_BASE_URL}/api/reviews/${id}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setReviews(data.reviews || []);
+        } else {
+          setReviews([]);
+        }
+      } catch (error) {
+        console.error("Failed to load reviews:", error);
+        setReviews([]);
+      } finally {
+        setIsLoadingReviews(false);
+      }
+    };
+
+    if (isLoggedIn) {
+      loadReviews();
+    } else {
+      setReviews([]);
+      setIsLoadingReviews(false);
+    }
+  }, [id, isLoggedIn, getAccessToken]);
 
   // ⚠️ CONDITIONAL RETURNS MUST BE AFTER ALL HOOKS
   // 로딩 중이거나 상품이 없으면 null 반환
-  if (isLoadingProduct || !product) {
-    return null;
+  if (isLoadingProduct) {
+    return (
+      <main className="container mx-auto px-4 lg:px-8 py-8 lg:py-12">
+        <div className="flex items-center justify-center py-20">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#b78b1f]"></div>
+        </div>
+      </main>
+    );
   }
 
-  const increaseQuantity = () => setQuantity(prev => prev + 1);
-  const decreaseQuantity = () => setQuantity(prev => (prev > 1 ? prev - 1 : 1));
+  if (!product) {
+    return (
+      <main className="container mx-auto px-4 lg:px-8 py-8 lg:py-12">
+        <div className="text-center py-20">
+          <p className="text-gray-500 mb-4">상품을 찾을 수 없습니다</p>
+          <button
+            onClick={() => navigate("/")}
+            className="bg-black text-white px-6 py-2 rounded-lg font-bold"
+          >
+            홈으로 돌아가기
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  const increaseQuantity = () => setQuantity((prev) => prev + 1);
+  const decreaseQuantity = () =>
+    setQuantity((prev) => (prev > 1 ? prev - 1 : 1));
 
   const handleAddToCart = () => {
     if (!isLoggedIn) {
@@ -117,7 +225,9 @@ export default function ProductDetailPage() {
       product.images && product.images.length > 0 ? product.images[0] : img1,
       quantity
     );
-    toast.success(`${product.name}을(를) ${quantity}개 장바구니에 추가했습니다!`);
+    toast.success(
+      `${product.name}을(를) ${quantity}개 장바구니에 추가했습니다!`
+    );
   };
 
   const handleBuyNow = () => {
@@ -133,38 +243,46 @@ export default function ProductDetailPage() {
     }
 
     // 바로 구매 페이지로 이동
-    navigate("/checkout", { 
-      state: { 
-        type: "direct", 
-        productId: product.id, 
-        quantity 
-      } 
+    navigate("/checkout", {
+      state: {
+        type: "direct",
+        productId: product.id,
+        quantity,
+      },
     });
   };
 
   const totalPrice = product.price * quantity;
-  const totalSavings = product.hasDiscount && product.originalPrice 
-    ? (product.originalPrice - product.price) * quantity 
-    : 0;
+  const totalSavings =
+    product.hasDiscount && product.originalPrice
+      ? (product.originalPrice - product.price) * quantity
+      : 0;
 
   // 기본값 설정
   const productImages = product.images || [img1, img1, img1];
   const productRating = product.rating || 4.5;
   const productReviewCount = product.reviewCount || 128;
-  const productDescription = product.description || `${product.name}은(는) 최고의 품질과 성능을 자랑하는 프리미엄 제품입니다. 합리적인 가격으로 만나보세요.`;
+  const productDescription =
+    product.description ||
+    `${product.name}은(는) 최고의 품질과 성능을 자랑하는 프리미엄 제품입니다. 합리적인 가격으로 만나보세요.`;
   const productSpecs = product.specs || [
     "정품 인증 완료",
     "1년 무상 품질 보증",
     "전국 무료 배송",
-    "구매 후 7일 이내 무료 반품 가능"
+    "구매 후 7일 이내 무료 반품 가능",
   ];
-  const productDiscount = product.hasDiscount && product.originalPrice 
-    ? Math.round(((product.originalPrice - product.price) / product.originalPrice) * 100) 
-    : 0;
+  const productDiscount =
+    product.hasDiscount && product.originalPrice
+      ? Math.round(
+          ((product.originalPrice - product.price) / product.originalPrice) *
+            100
+        )
+      : 0;
 
-  const averageRating = reviews.length > 0 
-    ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length 
-    : 0;
+  const averageRating =
+    reviews.length > 0
+      ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
+      : 0;
 
   // 리뷰수는 실제 reviews 배열의 length를 사용
   const actualReviewCount = reviews.length;
@@ -182,9 +300,21 @@ export default function ProductDetailPage() {
       toast.error("로그인이 필요합니다");
       return;
     }
-    
-    if (!newReview.content.trim()) {
+
+    // 리뷰 내용 유효성 검증
+    const trimmedContent = newReview.content.trim();
+    if (!trimmedContent) {
       toast.error("후기 내용을 입력해주세요");
+      return;
+    }
+
+    if (trimmedContent.length < 10) {
+      toast.error("리뷰 내용은 최소 10자 이상이어야 합니다");
+      return;
+    }
+
+    if (trimmedContent.length > 1000) {
+      toast.error("리뷰 내용은 최대 1000자까지 가능합니다");
       return;
     }
 
@@ -198,50 +328,56 @@ export default function ProductDetailPage() {
         setIsSubmittingReview(false);
         return;
       }
-      
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/save-review`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ review: newReview })
-        }
-      );
+
+      const response = await fetch(`${API_BASE_URL}/api/save-review`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: product?.id,
+          rating: newReview.rating,
+          content: newReview.content,
+        }),
+      });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Failed to save review');
+        throw new Error(error.error || "Failed to save review");
       }
 
       const data = await response.json();
-      
+
       // 새 리뷰를 목록에 추가
       const newReviewItem: Review = {
-        id: reviews.length + 1,
-        productId: data.review.product_id,
+        id: data.review.id, // API에서 반환한 reviewId 사용
+        productId: data.review.productId,
+        userId: data.review.userId || currentUser?.id || "",
         author: data.review.author,
         rating: data.review.rating,
         date: data.review.date,
         content: data.review.content,
-        likes: 0,
-        images: [],
-        reviewKey: `${Date.now()}_${data.review.product_id}` // reviewKey 추가
+        likes: data.review.likes || 0,
+        helpful: data.review.helpfulCount || 0,
+        helpfulCount: data.review.helpfulCount || 0,
+        images: data.review.images || [],
       };
 
       setReviews([newReviewItem, ...reviews]);
       setNewReview({ rating: 5, content: "" });
       toast.success("후기가 등록되었습니다!");
-      
+
       // 1.5초 후 버튼 재활성화
       setTimeout(() => {
         setIsSubmittingReview(false);
       }, 1500);
     } catch (error) {
-      console.error('Failed to save review:', error);
-      toast.error("리뷰 등록에 실패했습니다");
+      console.error("Failed to save review:", error);
+      const errorMessage =
+        error instanceof Error ? error.message : "리뷰 등록에 실패했습니다";
+      toast.error(errorMessage);
+      setIsSubmittingReview(false); // ✅ 에러 시에도 상태 초기화
     }
   };
 
@@ -252,61 +388,113 @@ export default function ProductDetailPage() {
       return;
     }
 
+    // 이미 처리 중이면 무시
+    if (isHelpfulProcessing.has(review.id)) {
+      return;
+    }
+
+    // 처리 중 상태로 설정
+    setIsHelpfulProcessing((prev) => new Set(prev).add(review.id));
+
     try {
-      console.log("Liking review with key:", review.reviewKey);
-      
       const token = await getAccessToken();
       if (!token) {
         toast.error("인증 정보가 없습니다");
+        setIsHelpfulProcessing((prev) => {
+          const next = new Set(prev);
+          next.delete(review.id);
+          return next;
+        });
         return;
       }
 
       const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/reviews/${review.id}/helpful`,
+        `${API_BASE_URL}/api/reviews/${review.id}/helpful`,
         {
-          method: 'POST',
+          method: "POST",
           headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
           },
-          body: JSON.stringify({ helpful: !isHelpful })
+          body: JSON.stringify({ helpful: true }),
         }
       );
-
-      console.log("Like response status:", response.status);
 
       if (!response.ok) {
         const errorData = await response.json();
-        console.error("Like error response:", errorData);
-        
-        // 이미 눌렀을 경우
-        if (errorData.alreadyMarked) {
-          toast.error("이미 도움이 돼요를 눌렀습니다");
-          return;
-        }
-        
-        throw new Error(errorData.error || 'Failed to like review');
+        throw new Error(errorData.error || "Failed to like review");
       }
 
       const data = await response.json();
-      console.log("Like success, updated review:", data.review);
-      
+
       // Update local state with new review data
-      setReviews(prevReviews => prevReviews.map(r => 
-        r.id === review.id 
-          ? { ...r, likes: data.review.helpful, helpful: data.review.helpful }
-          : r
-      ));
-      
-      toast.success('도움이 돼요!');
+      if (data.review) {
+        setReviews((prevReviews) =>
+          prevReviews.map((r) =>
+            r.id === review.id
+              ? {
+                  ...r,
+                  likes:
+                    data.review?.helpfulCount ??
+                    data.review?.likes ??
+                    r.likes ??
+                    0,
+                  helpful:
+                    data.review?.helpfulCount ??
+                    data.review?.helpful ??
+                    r.helpful ??
+                    0,
+                  helpfulCount: data.review?.helpfulCount ?? 0,
+                  isHelpful: data.isHelpful ?? !r.isHelpful,
+                }
+              : r
+          )
+        );
+      } else {
+        // review가 없어도 isHelpful 상태는 업데이트
+        setReviews((prevReviews) =>
+          prevReviews.map((r) =>
+            r.id === review.id
+              ? {
+                  ...r,
+                  isHelpful: data.isHelpful ?? !r.isHelpful,
+                  likes: data.isHelpful
+                    ? (r.likes ?? 0) + 1
+                    : Math.max((r.likes ?? 0) - 1, 0),
+                }
+              : r
+          )
+        );
+      }
+
+      // 토글 상태에 따라 메시지 표시
+      if (data.isHelpful) {
+        toast.success("도움이 돼요!");
+      } else {
+        toast.info("도움이 돼요를 취소했습니다");
+      }
     } catch (error) {
-      console.error('Failed to mark as helpful:', error);
-      toast.error("도움돼요 표시에 실패했습니다");
+      console.error("Failed to mark as helpful:", error);
+      const errorMessage =
+        error instanceof Error ? error.message : "도움돼요 표시에 실패했습니다";
+      toast.error(errorMessage);
+    } finally {
+      // 처리 완료 후 상태 제거
+      setIsHelpfulProcessing((prev) => {
+        const next = new Set(prev);
+        next.delete(review.id);
+        return next;
+      });
     }
   };
 
-  const handleDeleteReview = async (reviewKey: string) => {
+  const handleDeleteReview = async (reviewId: string) => {
     if (!confirm("리뷰를 삭제하시겠습니까?")) return;
+
+    if (!reviewId) {
+      toast.error("리뷰 ID가 없습니다");
+      return;
+    }
 
     try {
       const token = await getAccessToken();
@@ -315,27 +503,28 @@ export default function ProductDetailPage() {
         return;
       }
 
-      const response = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e/api/reviews/${reviewKey}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          }
-        }
-      );
+      const response = await fetch(`${API_BASE_URL}/api/reviews/${reviewId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Failed to delete review');
+        throw new Error(error.error || "Failed to delete review");
       }
 
       // Remove review from local state
-      setReviews(reviews.filter(review => review.reviewKey !== reviewKey));
+      setReviews(reviews.filter((review) => review.id !== reviewId));
       toast.success("후기가 삭제되었습니다");
     } catch (error) {
-      console.error('Delete review error:', error);
-      toast.error(`후기 삭제 실패: ${error.message}`);
+      console.error("Delete review error:", error);
+      toast.error(
+        `후기 삭제 실패: ${
+          error instanceof Error ? error.message : "알 수 없는 오류"
+        }`
+      );
     }
   };
 
@@ -343,7 +532,9 @@ export default function ProductDetailPage() {
     <main className="container mx-auto px-4 lg:px-8 py-8 lg:py-12">
       {/* Breadcrumb */}
       <div className="text-sm text-gray-600 mb-6">
-        <button onClick={() => navigate("/")} className="hover:text-black">홈</button>
+        <button onClick={() => navigate("/")} className="hover:text-black">
+          홈
+        </button>
         <span className="mx-2">/</span>
         <span className="text-black font-bold">상품 상세</span>
       </div>
@@ -353,14 +544,19 @@ export default function ProductDetailPage() {
         {/* Product Images */}
         <div>
           {/* Main Image */}
-          <div 
+          <div
             className="relative rounded-lg shadow-lg bg-gradient-to-b from-white to-[#e8e7e7] aspect-square mb-4 overflow-hidden cursor-pointer"
             onClick={() => setSelectedImageIndex(0)}
           >
             {product.hasDiscount && product.originalPrice > product.price && (
               <div className="absolute top-4 left-4 bg-red-500 text-white rounded px-3 py-2 flex items-center gap-1 shadow-lg z-10">
                 <span className="font-bold">
-                  {Math.round(((product.originalPrice - product.price) / product.originalPrice) * 100)}% 할인
+                  {Math.round(
+                    ((product.originalPrice - product.price) /
+                      product.originalPrice) *
+                      100
+                  )}
+                  % 할인
                 </span>
               </div>
             )}
@@ -368,18 +564,17 @@ export default function ProductDetailPage() {
               alt={product.name}
               className="absolute inset-0 w-full h-full object-cover"
               src={productImages[selectedImageIndex]}
-              fallbackSrc={img1}
             />
           </div>
-          
+
           {/* All Thumbnail Images (모든 이미지 표시) */}
           {productImages.length > 0 && (
             <div className="grid grid-cols-4 gap-2">
               {productImages.slice(0, 4).map((img, index) => (
-                <div 
-                  key={index} 
+                <div
+                  key={index}
                   className={`relative rounded-lg shadow bg-gradient-to-b from-white to-[#e8e7e7] aspect-square overflow-hidden cursor-pointer hover:opacity-80 transition-all ${
-                    selectedImageIndex === index ? 'ring-4 ring-[#b78b1f]' : ''
+                    selectedImageIndex === index ? "ring-4 ring-[#b78b1f]" : ""
                   }`}
                   onClick={() => setSelectedImageIndex(index)}
                 >
@@ -387,7 +582,6 @@ export default function ProductDetailPage() {
                     alt={`Product ${index + 1}`}
                     className="absolute inset-0 w-full h-full object-cover"
                     src={img}
-                    fallbackSrc={img1}
                   />
                   {selectedImageIndex === index && (
                     <div className="absolute inset-0 bg-black bg-opacity-10" />
@@ -400,8 +594,10 @@ export default function ProductDetailPage() {
 
         {/* Product Info */}
         <div>
-          <h1 className="text-2xl lg:text-3xl font-bold mb-4">{product.name}</h1>
-          
+          <h1 className="text-2xl lg:text-3xl font-bold mb-4">
+            {product.name}
+          </h1>
+
           {/* Rating */}
           <div className="flex items-center gap-2 mb-4">
             <div className="flex items-center">
@@ -409,7 +605,11 @@ export default function ProductDetailPage() {
                 <Star
                   key={star}
                   size={20}
-                  className={star <= averageRating ? "fill-[#b78b1f] text-[#b78b1f]" : "fill-gray-300 text-gray-300"}
+                  className={
+                    star <= averageRating
+                      ? "fill-[#b78b1f] text-[#b78b1f]"
+                      : "fill-gray-300 text-gray-300"
+                  }
                 />
               ))}
             </div>
@@ -420,13 +620,13 @@ export default function ProductDetailPage() {
 
           {/* Price */}
           <div className="mb-6">
-            {product.originalPrice > product.price && (
+            {(product.originalPrice ?? 0) > (product.price ?? 0) && (
               <p className="text-lg text-gray-400 line-through mb-1">
-                {product.originalPrice.toLocaleString()}원
+                {(product.originalPrice ?? 0).toLocaleString()}원
               </p>
             )}
             <p className="text-3xl font-bold text-black">
-              {product.price.toLocaleString()}
+              {(product.price ?? 0).toLocaleString()}
             </p>
           </div>
 
@@ -522,7 +722,7 @@ export default function ProductDetailPage() {
             {productDescription}
           </p>
           <div className="space-y-4">
-            <h3 className="font-bold">제품 양</h3>
+            <h3 className="font-bold">제품 사양</h3>
             <ul className="space-y-2 text-gray-700">
               {productSpecs.map((spec, index) => (
                 <li key={index} className="flex items-start">
@@ -548,11 +748,17 @@ export default function ProductDetailPage() {
                       <Star
                         key={star}
                         size={16}
-                        className={star <= averageRating ? "fill-[#b78b1f] text-[#b78b1f]" : "fill-gray-300 text-gray-300"}
+                        className={
+                          star <= averageRating
+                            ? "fill-[#b78b1f] text-[#b78b1f]"
+                            : "fill-gray-300 text-gray-300"
+                        }
                       />
                     ))}
                   </div>
-                  <div className="text-xs text-gray-600">{reviews.length}개의 후기</div>
+                  <div className="text-xs text-gray-600">
+                    {reviews.length}개의 후기
+                  </div>
                 </div>
               </div>
               <div className="text-sm text-gray-600">
@@ -561,54 +767,67 @@ export default function ProductDetailPage() {
             </div>
           </div>
 
-          {/* Write Review Form */}
-          <div className="bg-white border rounded-lg p-6 mb-8">
-            <h3 className="font-bold mb-4 flex items-center gap-2">
-              <MessageCircle size={20} />
-              후기 작성하기
-            </h3>
-            <form onSubmit={handleSubmitReview} className="space-y-4">
-              <div>
-                <label className="block text-sm font-bold mb-2">별점</label>
-                <div className="flex items-center gap-1">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <button
-                      key={star}
-                      type="button"
-                      onClick={() => setNewReview({ ...newReview, rating: star })}
-                      className="p-1"
-                    >
-                      <Star
-                        size={28}
-                        className={star <= newReview.rating ? "fill-[#b78b1f] text-[#b78b1f]" : "fill-gray-300 text-gray-300"}
-                      />
-                    </button>
-                  ))}
+          {/* Write Review Form - Only show when logged in */}
+          {isLoggedIn && (
+            <div className="bg-white border rounded-lg p-6 mb-8">
+              <h3 className="font-bold mb-4 flex items-center gap-2">
+                <MessageCircle size={20} />
+                후기 작성하기
+              </h3>
+              <form onSubmit={handleSubmitReview} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-bold mb-2">별점</label>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        onClick={() =>
+                          setNewReview({ ...newReview, rating: star })
+                        }
+                        className="p-1"
+                      >
+                        <Star
+                          size={28}
+                          className={
+                            star <= newReview.rating
+                              ? "fill-[#b78b1f] text-[#b78b1f]"
+                              : "fill-gray-300 text-gray-300"
+                          }
+                        />
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label htmlFor="review-content" className="block text-sm font-bold mb-2">
-                  후기 내용 <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                  id="review-content"
-                  value={newReview.content}
-                  onChange={(e) => setNewReview({ ...newReview, content: e.target.value })}
-                  className="w-full bg-[#eeeeee] rounded border border-[#eeeeee] px-4 py-3 text-sm outline-none focus:border-black min-h-[120px]"
-                  placeholder="상품에 대한 후기를 작성해주세요"
-                  required
-                />
-              </div>
+                <div>
+                  <label
+                    htmlFor="review-content"
+                    className="block text-sm font-bold mb-2"
+                  >
+                    후기 내용 <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    id="review-content"
+                    value={newReview.content}
+                    onChange={(e) =>
+                      setNewReview({ ...newReview, content: e.target.value })
+                    }
+                    className="w-full bg-[#eeeeee] rounded border border-[#eeeeee] px-4 py-3 text-sm outline-none focus:border-black min-h-[120px]"
+                    placeholder="상품에 대한 후기를 작성해주세요"
+                    required
+                  />
+                </div>
 
-              <button
-                type="submit"
-                className="bg-black text-white rounded px-6 py-3 font-bold hover:bg-gray-800"
-              >
-                후기 등록
-              </button>
-            </form>
-          </div>
+                <button
+                  type="submit"
+                  className="bg-black text-white rounded px-6 py-3 font-bold hover:bg-gray-800"
+                >
+                  후기 등록
+                </button>
+              </form>
+            </div>
+          )}
 
           {/* Reviews List */}
           <div className="space-y-4">
@@ -624,31 +843,46 @@ export default function ProductDetailPage() {
                           <Star
                             key={star}
                             size={14}
-                            className={star <= review.rating ? "fill-[#b78b1f] text-[#b78b1f]" : "fill-gray-300 text-gray-300"}
+                            className={
+                              star <= review.rating
+                                ? "fill-[#b78b1f] text-[#b78b1f]"
+                                : "fill-gray-300 text-gray-300"
+                            }
                           />
                         ))}
                       </div>
                     </div>
                     <p className="text-xs text-gray-500">{review.date}</p>
                   </div>
-                  <div>
-                    <button
-                      onClick={() => handleDeleteReview(review.reviewKey || '')}
-                      className="flex items-center gap-1 text-sm text-gray-600 hover:text-[#b78b1f]"
-                    >
-                      <Trash2 size={14} />
-                      삭제
-                    </button>
-                  </div>
+                  {currentUser && review.userId === currentUser.id && (
+                    <div>
+                      <button
+                        onClick={() => handleDeleteReview(review.id)}
+                        className="flex items-center gap-1 text-sm text-gray-600 hover:text-[#b78b1f]"
+                      >
+                        <Trash2 size={14} />
+                        삭제
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                <p className="text-gray-700 leading-relaxed mb-4">{review.content}</p>
+                <p className="text-gray-700 leading-relaxed mb-4">
+                  {review.content}
+                </p>
 
                 {review.images && review.images.length > 0 && (
                   <div className="flex gap-2 mb-4">
                     {review.images.map((img, index) => (
-                      <div key={index} className="w-20 h-20 bg-gray-100 rounded overflow-hidden">
-                        <img src={img} alt={`Review ${index + 1}`} className="w-full h-full object-cover" />
+                      <div
+                        key={index}
+                        className="w-20 h-20 bg-gray-100 rounded overflow-hidden"
+                      >
+                        <img
+                          src={img}
+                          alt={`Review ${index + 1}`}
+                          className="w-full h-full object-cover"
+                        />
                       </div>
                     ))}
                   </div>
@@ -656,10 +890,18 @@ export default function ProductDetailPage() {
 
                 <button
                   onClick={() => handleHelpfulClick(review)}
-                  className="flex items-center gap-1 text-sm text-gray-600 hover:text-[#b78b1f]"
+                  className={`flex items-center gap-1 text-sm ${
+                    review.isHelpful
+                      ? "text-[#b78b1f] font-semibold"
+                      : "text-gray-600 hover:text-[#b78b1f]"
+                  }`}
+                  disabled={isHelpfulProcessing.has(review.id)}
                 >
-                  <ThumbsUp size={14} />
-                  도움이 돼요 ({review.likes})
+                  <ThumbsUp
+                    size={14}
+                    fill={review.isHelpful ? "#b78b1f" : "none"}
+                  />
+                  도움이 돼요 ({review.helpfulCount || review.likes || 0})
                 </button>
               </div>
             ))}

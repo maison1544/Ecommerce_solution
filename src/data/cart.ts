@@ -9,57 +9,80 @@ export interface CartItem {
   image: string;
 }
 
+// ============================================
+// 🔥 서버 데이터와 동기화되는 전역 장바구니 스토어
+// - React 컴포넌트에서 구독하여 실시간 UI 동기화
+// - 서버 API 호출 결과로 syncCartWithServer 호출
+// ============================================
+
 // 배포용 - 빈 배열로 시작
 export const cartItems: CartItem[] = [];
 
-export function getCartItemsByUserId(userId: number): CartItem[] {
-  return cartItems.filter(item => item.userId === userId);
+// ============================================
+// 구독 시스템: React 상태 동기화
+// ============================================
+
+type CartChangeListener = (items: CartItem[]) => void;
+const cartChangeListeners = new Set<CartChangeListener>();
+
+// 변경 알림 함수 - 마이크로태스크로 배치 처리
+let notifyScheduled = false;
+function notifyCartChange(): void {
+  if (notifyScheduled) return;
+  notifyScheduled = true;
+
+  // 마이크로태스크로 배치 처리 (동일 tick에서 여러 변경 시 1번만 알림)
+  queueMicrotask(() => {
+    notifyScheduled = false;
+    const currentItems = [...cartItems];
+    cartChangeListeners.forEach((listener) => {
+      try {
+        listener(currentItems);
+      } catch (error) {
+        console.error("Cart change listener error:", error);
+      }
+    });
+  });
 }
 
-export function addCartItem(userId: number, productId: number, name: string, price: number, originalPrice: number | undefined, image: string): CartItem {
-  console.log("🔧 addCartItem 함수 호출:", { userId, productId, name });
-  
-  const existingItem = cartItems.find(item => item.userId === userId && item.productId === productId);
-  
-  if (existingItem) {
-    console.log("  ✓ 기존 아이템 발견, 수량 증가:", existingItem);
-    existingItem.quantity += 1;
-    console.log("  ✓ 업데이트된 수량:", existingItem.quantity);
-    return existingItem;
-  }
-  
-  const newItem: CartItem = {
-    id: Math.max(...cartItems.map(i => i.id), 0) + 1,
-    userId,
-    productId,
-    name,
-    price,
-    originalPrice,
-    quantity: 1,
-    image
+// 구독 함수 (React에서 사용)
+export function subscribeToCartChanges(
+  listener: CartChangeListener
+): () => void {
+  cartChangeListeners.add(listener);
+  return () => {
+    cartChangeListeners.delete(listener);
   };
-  
-  console.log("  ✓ 새 아이템 생성:", newItem);
-  cartItems.push(newItem);
-  console.log("  ✓ cartItems 배열에 추가 완료. 총 아이템 수:", cartItems.length);
-  
-  return newItem;
 }
 
-export function updateCartItemQuantity(itemId: number, quantity: number): boolean {
-  const item = cartItems.find(i => i.id === itemId);
-  if (item) {
-    item.quantity = quantity;
-    return true;
-  }
-  return false;
+// ============================================
+// 플러시 함수 (기존 호환성 유지)
+// ============================================
+
+export function flushPendingUpdates(): void {
+  // 서버 API 기반으로 변경되어 이제 빈 함수
+  console.log("🔄 장바구니 상태 동기화");
 }
 
-export function removeCartItem(itemId: number): boolean {
-  const index = cartItems.findIndex(i => i.id === itemId);
-  if (index !== -1) {
-    cartItems.splice(index, 1);
-    return true;
-  }
-  return false;
+// ============================================
+// 🔥 서버 데이터와 전역 스토어 동기화
+// ============================================
+
+export function syncCartWithServer(serverCart: CartItem[]): void {
+  // 전역 cartItems 배열을 서버 데이터로 완전히 덮어쓰기
+  cartItems.length = 0; // 기존 데이터 비우기
+  serverCart.forEach((item) => cartItems.push(item));
+
+  console.log("🔄 서버 데이터와 동기화 완료:", cartItems.length, "개");
+
+  // 모든 구독자에게 변경 알림
+  notifyCartChange();
+}
+
+// ============================================
+// 유틸리티: 전역 스토어의 현재 상태 조회 (안전한 복사본)
+// ============================================
+
+export function getCartItems(): CartItem[] {
+  return [...cartItems]; // 복사본 반환
 }

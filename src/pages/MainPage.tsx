@@ -1,14 +1,50 @@
 import { Link } from "react-router-dom";
+import { useMemo, useState, useEffect } from "react";
 import { ArrowRight, TrendingUp, Shield, Truck } from "lucide-react";
 import { ProductCard } from "../components/ProductCard";
-import { products } from "../data/products";
+import { products, Product } from "../data/products";
 import { useAuth } from "../context/AuthContext";
+import { API_BASE_URL } from "../utils/api";
 
 export default function MainPage() {
   const { isLoggedIn } = useAuth();
-  
-  // 특가 상품 4개만 표시
-  const featuredProducts = products.filter(p => p.category === "special-deals").slice(0, 4);
+  const [allProducts, setAllProducts] = useState<Product[]>(products);
+  const [loading, setLoading] = useState(true);
+
+  // Load products from API
+  useEffect(() => {
+    const loadProducts = async () => {
+      try {
+        const API_BASE = `${API_BASE_URL}`;
+        const response = await fetch(`${API_BASE}/api/products`);
+
+        if (response.ok) {
+          const data = await response.json();
+          const apiProducts = data.products || [];
+          const allProductsList = [...products, ...apiProducts];
+          const uniqueProducts = allProductsList.filter(
+            (product, index, self) =>
+              index === self.findIndex((p) => p.id === product.id)
+          );
+          setAllProducts(uniqueProducts);
+        }
+      } catch (error) {
+        console.error("Failed to load products:", error);
+        // API 실패 시 로컬 데이터 사용
+        setAllProducts(products);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProducts();
+  }, []);
+
+  // 특가 상품 4개만 표시 - useMemo로 최적화
+  const featuredProducts = useMemo(
+    () => allProducts.filter((p) => p.category === "special-deals").slice(0, 4),
+    [allProducts]
+  );
 
   return (
     <main>
@@ -54,9 +90,7 @@ export default function MainPage() {
                 <Shield size={32} className="text-white" />
               </div>
               <h3 className="font-bold mb-2">정품 보증</h3>
-              <p className="text-sm text-gray-600">
-                100% 정품만을 판매합니다
-              </p>
+              <p className="text-sm text-gray-600">100% 정품만을 판매합니다</p>
             </div>
 
             <div className="flex flex-col items-center text-center">
@@ -85,21 +119,33 @@ export default function MainPage() {
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
-            {featuredProducts.map((product) => (
-              <div key={product.id} className="flex justify-center">
-                <div className="w-full max-w-[263px]">
-                  <ProductCard
-                    hasDiscount={product.hasDiscount}
-                    id={product.id}
-                    name={product.name}
-                    price={product.price}
-                    originalPrice={product.originalPrice}
-                    images={product.images}
-                    discount={product.discount}
-                  />
-                </div>
+            {loading ? (
+              <div className="col-span-2 lg:col-span-4 text-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#b78b1f] mx-auto"></div>
+                <p className="mt-4 text-gray-500">상품을 불러오는 중...</p>
               </div>
-            ))}
+            ) : featuredProducts.length === 0 ? (
+              <div className="col-span-2 lg:col-span-4 text-center py-12">
+                <p className="text-gray-500">특가 상품이 없습니다</p>
+              </div>
+            ) : (
+              featuredProducts.map((product) => (
+                <div key={product.id} className="flex justify-center">
+                  <div className="w-full max-w-[263px]">
+                    <ProductCard
+                      hasDiscount={product.hasDiscount}
+                      id={product.id}
+                      name={product.name}
+                      price={product.price}
+                      originalPrice={product.originalPrice}
+                      images={product.images}
+                      discount={product.discount}
+                      reviewCount={product.reviewCount}
+                    />
+                  </div>
+                </div>
+              ))
+            )}
           </div>
 
           <div className="text-center mt-8">

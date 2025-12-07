@@ -1,7 +1,9 @@
-import { useMemo, useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { Product, products as localProducts } from "../data/products";
 import { ProductCard } from "../components/ProductCard";
+import { useDebounce } from "../utils/performance";
+import { API_BASE_URL } from "../utils/api";
 
 export default function SearchResultsPage() {
   const [searchParams] = useSearchParams();
@@ -9,20 +11,56 @@ export default function SearchResultsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load products from local data
-  useEffect(() => {
-    setIsLoading(true);
-    setProducts(localProducts);
-    setIsLoading(false);
-  }, []);
+  // 디바운싱된 검색어
+  const debouncedSearch = useDebounce(searchQuery, 300);
 
-  // useMemo로 검색 결과 최적화
-  const filteredProducts = useMemo(() => {
-    if (!searchQuery) return [];
-    return products.filter(product =>
-      product.name.toLowerCase().includes(searchQuery.toLowerCase())
-    );
-  }, [searchQuery, products]);
+  // 서버에서 검색 결과 로드
+  useEffect(() => {
+    const loadProducts = async () => {
+      if (!debouncedSearch) {
+        setProducts([]);
+        setIsLoading(false);
+        return;
+      }
+
+      setIsLoading(true);
+      try {
+        const API_BASE = `${API_BASE_URL}`;
+        const params = new URLSearchParams({
+          search: debouncedSearch,
+        });
+        const response = await fetch(`${API_BASE}/api/products?${params}`);
+
+        if (response.ok) {
+          const data = await response.json();
+          const apiProducts = data.products || [];
+          // 로컬 상품에서도 검색
+          const localResults = localProducts.filter((p) =>
+            p.name.toLowerCase().includes(debouncedSearch.toLowerCase())
+          );
+          const allProductsList = [...localResults, ...apiProducts];
+          const uniqueProducts = allProductsList.filter(
+            (product, index, self) =>
+              index === self.findIndex((p) => p.id === product.id)
+          );
+          setProducts(uniqueProducts);
+        }
+      } catch (error) {
+        console.error("Failed to load products:", error);
+        // 에러 시 로컬 상품에서만 검색
+        const localResults = localProducts.filter((p) =>
+          p.name.toLowerCase().includes(debouncedSearch.toLowerCase())
+        );
+        setProducts(localResults);
+      }
+      setIsLoading(false);
+    };
+
+    loadProducts();
+  }, [debouncedSearch]);
+
+  // 검색 결과
+  const filteredProducts = products;
 
   return (
     <main className="container mx-auto px-4 lg:px-8 py-8 lg:py-12">
@@ -52,7 +90,7 @@ export default function SearchResultsPage() {
           {filteredProducts.map((product) => (
             <div key={product.id} className="flex justify-center">
               <div className="w-full max-w-[263px]">
-                <ProductCard 
+                <ProductCard
                   hasDiscount={product.hasDiscount}
                   id={product.id}
                   name={product.name}
@@ -60,6 +98,7 @@ export default function SearchResultsPage() {
                   originalPrice={product.originalPrice}
                   images={product.images}
                   discount={product.discount}
+                  reviewCount={product.reviewCount}
                 />
               </div>
             </div>

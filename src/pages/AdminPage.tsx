@@ -1,47 +1,120 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { Package, Users, ShoppingCart, TrendingUp, Plus, Edit, Trash2, Search, X, Upload, Bell, Ban, CheckCircle, Shield, MessageCircle } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
+import {
+  Package,
+  Users,
+  ShoppingCart,
+  TrendingUp,
+  Plus,
+  Edit,
+  Trash2,
+  Search,
+  Upload,
+  X,
+  Shield,
+  MessageCircle,
+  CheckCircle,
+  Ban,
+  Key,
+  MapPin,
+  Star,
+} from "lucide-react";
+import { useDebounce } from "../utils/performance";
 import { useAuth } from "../context/AuthContext";
-import { toast } from "sonner@2.0.3";
-import { products, Product, getProductById } from "../data/products";
-import { User } from "../data/users";
-import { orders, Order, updateOrderStatus } from "../data/orders";
+import { products, Product } from "../data/products";
+import { orders, Order } from "../data/orders";
 import { categoryMap, categoryList } from "../data/categories";
 import { InquiriesTab } from "../components/InquiriesTab";
-import { projectId, publicAnonKey } from "../utils/supabase/info";
+import { Pagination, TableSkeleton } from "../components/Pagination";
+import { API_BASE_URL } from "../utils/api";
 
 // ✅ API Base URL with correct slug
-const API_BASE = `https://${projectId}.supabase.co/functions/v1/make-server-94a0507e`;
+const API_BASE = `${API_BASE_URL}`;
 
-type TabType = "dashboard" | "products" | "users" | "admins" | "orders" | "inquiries";
+type TabType =
+  | "dashboard"
+  | "products"
+  | "users"
+  | "admins"
+  | "orders"
+  | "inquiries";
 
 // 새 주문 알림을 위한 전역 상태
 let newOrdersCount = 0;
 
 export default function AdminPage() {
   const navigate = useNavigate();
-  const { currentUser, isLoggedIn, logout, getAccessToken } = useAuth();
+  const [searchParams] = useSearchParams();
+  const { currentUser, isLoggedIn, logout, getAccessToken, isAuthLoading } =
+    useAuth();
   const [activeTab, setActiveTab] = useState<TabType>("dashboard");
   const [newOrders, setNewOrders] = useState(0);
 
+  // URL query parameter로 탭 설정
+  useEffect(() => {
+    const tab = searchParams.get("tab") as TabType | null;
+    if (
+      tab &&
+      [
+        "dashboard",
+        "products",
+        "users",
+        "admins",
+        "orders",
+        "inquiries",
+      ].includes(tab)
+    ) {
+      setActiveTab(tab);
+    }
+  }, [searchParams]);
+
   // 관리자 권한 체크
   useEffect(() => {
-    if (!isLoggedIn || !currentUser || currentUser.role !== "admin") {
+    // 🔥 세션 로딩 중이면 체크하지 않음
+    if (isAuthLoading) {
+      return;
+    }
+
+    // currentUser가 로드될 때까지 기다림
+    if (!isLoggedIn) {
+      navigate("/login");
+      return;
+    }
+
+    // currentUser가 아직 로드 중이면 체크하지 않음
+    if (currentUser === null) {
+      return;
+    }
+
+    // currentUser가 로드되었지만 admin이 아니면 리다이렉트
+    if (currentUser.role !== "admin") {
       toast.error("관리자 권한이 필요합니다");
       navigate("/");
+      return;
     }
 
     // 최근 30분 내 새 주문 체크
-    const recentOrders = orders.filter(order => {
+    const recentOrders = orders.filter((order) => {
       const orderDate = new Date(order.date);
       const now = new Date();
       const diff = now.getTime() - orderDate.getTime();
       return diff < 30 * 60 * 1000; // 30분
     });
     setNewOrders(recentOrders.length);
-  }, [isLoggedIn, currentUser, navigate]);
+  }, [isLoggedIn, currentUser, navigate, isAuthLoading]);
 
-  if (!currentUser || currentUser.role !== "admin") {
+  // 🔥 로딩 중이면 로딩 표시
+  if (isAuthLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#b78b1f]"></div>
+      </div>
+    );
+  }
+
+  // 로딩 중이거나 권한 없으면 표시하지 않음
+  if (!isLoggedIn || !currentUser || currentUser.role !== "admin") {
     return null;
   }
 
@@ -57,12 +130,6 @@ export default function AdminPage() {
               상품, 유저, 주문을 관리하세요
             </p>
           </div>
-          {newOrders > 0 && (
-            <div className="bg-red-500 text-white px-4 py-2 rounded-lg flex items-center gap-2">
-              <Bell size={20} />
-              <span className="font-bold">새 주문 {newOrders}건</span>
-            </div>
-          )}
         </div>
         <div className="h-px bg-black mt-5" />
       </div>
@@ -157,66 +224,61 @@ export default function AdminPage() {
 
 // 대시보드 탭
 function DashboardTab() {
-  const { getAccessToken } = useAuth();
+  const { getAccessToken, currentUser } = useAuth();
   const [stats, setStats] = useState({
     totalProducts: 0,
     totalUsers: 0,
     totalOrders: 0,
-    totalRevenue: 0
+    totalRevenue: 0,
   });
 
   useEffect(() => {
     const loadStats = async () => {
       try {
         const token = await getAccessToken();
-        
+
         // Fetch products from API
-        const productsRes = await fetch(
-          `${API_BASE}/api/products`,
-          {
-            headers: {
-              'Authorization': `Bearer ${publicAnonKey}`,
-            }
-          }
-        );
-        
+        const productsRes = await fetch(`${API_BASE}/api/products`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
         // Fetch users from API
-        const usersRes = await fetch(
-          `${API_BASE}/api/admin/users`,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-            }
-          }
-        );
-        
+        const usersRes = await fetch(`${API_BASE}/api/admin/users`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
         // Fetch orders from API
-        const ordersRes = await fetch(
-          `${API_BASE}/api/admin/orders`,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-            }
-          }
-        );
-        
+        const ordersRes = await fetch(`${API_BASE}/api/admin/orders`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
         if (productsRes.ok && usersRes.ok && ordersRes.ok) {
           const productsData = await productsRes.json();
           const usersData = await usersRes.json();
           const ordersData = await ordersRes.json();
-          
+
           const totalProducts = productsData.products?.length || 0;
           const totalUsers = usersData.users?.length || 0;
           const totalOrders = ordersData.orders?.length || 0;
-          const totalRevenue = ordersData.orders
-            ?.filter((order: any) => order.status !== "취소")
-            .reduce((sum: number, order: any) => sum + order.totalAmount, 0) || 0;
-          
+          const totalRevenue =
+            ordersData.orders
+              ?.filter((order: any) => order.status !== "취소")
+              .reduce(
+                (sum: number, order: any) => sum + (order.totalAmount ?? 0),
+                0
+              ) || 0;
+
           setStats({
             totalProducts,
             totalUsers,
             totalOrders,
-            totalRevenue
+            totalRevenue,
           });
         }
       } catch (error) {
@@ -226,13 +288,13 @@ function DashboardTab() {
           totalProducts: products.length,
           totalUsers: 0,
           totalOrders: 0,
-          totalRevenue: 0
+          totalRevenue: 0,
         });
       }
     };
-    
+
     // Only load stats if user is admin
-    if (currentUser && currentUser.role === 'admin') {
+    if (currentUser && currentUser.role === "admin") {
       loadStats();
     }
   }, [currentUser]);
@@ -242,26 +304,26 @@ function DashboardTab() {
       label: "전체 상품",
       value: stats.totalProducts,
       icon: Package,
-      color: "bg-blue-500"
+      color: "bg-blue-500",
     },
     {
       label: "전체 유저",
       value: stats.totalUsers,
       icon: Users,
-      color: "bg-green-500"
+      color: "bg-green-500",
     },
     {
       label: "전체 주문",
       value: stats.totalOrders,
       icon: ShoppingCart,
-      color: "bg-purple-500"
+      color: "bg-purple-500",
     },
     {
       label: "총 매출",
       value: `${stats.totalRevenue.toLocaleString()}원`,
       icon: TrendingUp,
-      color: "bg-orange-500"
-    }
+      color: "bg-orange-500",
+    },
   ];
 
   return (
@@ -270,7 +332,9 @@ function DashboardTab() {
         {statsArray.map((stat, index) => (
           <div key={index} className="bg-white border rounded-lg p-6">
             <div className="flex items-center justify-between mb-4">
-              <div className={`w-12 h-12 ${stat.color} rounded-lg flex items-center justify-center`}>
+              <div
+                className={`w-12 h-12 ${stat.color} rounded-lg flex items-center justify-center`}
+              >
                 <stat.icon size={24} className="text-white" />
               </div>
             </div>
@@ -278,27 +342,6 @@ function DashboardTab() {
             <p className="text-sm text-gray-600">{stat.label}</p>
           </div>
         ))}
-      </div>
-
-      {/* Recent Orders */}
-      <div className="bg-white border rounded-lg p-6">
-        <h2 className="font-bold text-lg mb-4">최�� 주문</h2>
-        <div className="space-y-3">
-          {orders.slice(0, 5).map((order) => {
-            return (
-              <div key={order.id} className="flex items-center justify-between py-3 border-b last:border-b-0">
-                <div>
-                  <p className="font-bold text-sm">{order.id}</p>
-                  <p className="text-xs text-gray-600">{order.userName || '알 수 없음'} - {order.date}</p>
-                </div>
-                <div className="text-right">
-                  <p className="font-bold text-sm">{order.totalAmount.toLocaleString()}원</p>
-                  <p className="text-xs text-gray-600">{order.status}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
       </div>
     </div>
   );
@@ -316,7 +359,7 @@ function ProductsTab() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
   const [isSaving, setIsSaving] = useState(false); // 저장 중 상태
-  
+
   const [formData, setFormData] = useState<Partial<Product>>({
     name: "",
     price: 0,
@@ -326,7 +369,7 @@ function ProductsTab() {
     discount: 0,
     images: [],
     description: "",
-    specs: []
+    specs: [],
   });
 
   const [imageFiles, setImageFiles] = useState<File[]>([]);
@@ -336,13 +379,33 @@ function ProductsTab() {
   const [errors, setErrors] = useState({
     name: "",
     price: "",
-    category: ""
+    category: "",
   });
 
-  // Load products from local data
+  // Load products from API
   const loadProducts = async () => {
     setLoading(true);
-    setProductList(products); // Use local data
+    try {
+      const response = await fetch(`${API_BASE}/api/products`);
+      if (response.ok) {
+        const data = await response.json();
+        // API에서 가져온 상품과 로컬 상품 합치기
+        const apiProducts = data.products || [];
+        const allProducts = [...products, ...apiProducts];
+        // 중복 제거 (id 기준)
+        const uniqueProducts = allProducts.filter(
+          (product, index, self) =>
+            index === self.findIndex((p) => p.id === product.id)
+        );
+        setProductList(uniqueProducts);
+      } else {
+        // API 실패 시 로컬 데이터 사용
+        setProductList(products);
+      }
+    } catch (error) {
+      console.error("Failed to load products:", error);
+      setProductList(products); // Fallback to local data
+    }
     setLoading(false);
   };
 
@@ -368,17 +431,20 @@ function ProductsTab() {
 
   const handleChange = (field: string, value: any) => {
     const newFormData = { ...formData, [field]: value };
-    
+
     // 가격은 숫자로 변환
     if (field === "price" || field === "originalPrice") {
       const numValue = Number(value) || 0;
       newFormData[field] = numValue;
-      
-      const price = field === "price" ? numValue : (formData.price || 0);
-      const originalPrice = field === "originalPrice" ? numValue : (formData.originalPrice || 0);
-      
+
+      const price = field === "price" ? numValue : formData.price || 0;
+      const originalPrice =
+        field === "originalPrice" ? numValue : formData.originalPrice || 0;
+
       if (originalPrice > 0 && price > 0 && originalPrice > price) {
-        const calculatedDiscount = Math.round(((originalPrice - price) / originalPrice) * 100);
+        const calculatedDiscount = Math.round(
+          ((originalPrice - price) / originalPrice) * 100
+        );
         newFormData.discount = calculatedDiscount;
         newFormData.hasDiscount = true;
       } else {
@@ -386,7 +452,7 @@ function ProductsTab() {
         newFormData.hasDiscount = false;
       }
     }
-    
+
     setFormData(newFormData);
 
     // Real-time validation
@@ -410,7 +476,7 @@ function ProductsTab() {
       discount: 0,
       images: [],
       description: "",
-      specs: []
+      specs: [],
     });
     setErrors({ name: "", price: "", category: "" });
   };
@@ -431,19 +497,21 @@ function ProductsTab() {
 
     // 이미지 업로드 중인지 확인
     if (isUploadingImages) {
-      toast.warning("이미지 업로드가 진행 중입니다. 완료될 때까지 기다려주세요...");
+      toast.warning(
+        "이미지 업로드가 진행 중입니다. 완료될 때까지 기다려주세요..."
+      );
       return;
     }
 
     const validationErrors = {
       name: validateName(formData.name || ""),
       price: validatePrice(formData.price || 0),
-      category: validateCategory(formData.category || "")
+      category: validateCategory(formData.category || ""),
     };
 
     setErrors(validationErrors);
 
-    if (Object.values(validationErrors).some(error => error !== "")) {
+    if (Object.values(validationErrors).some((error) => error !== "")) {
       toast.error("입력 정보를 확인해주세요");
       return;
     }
@@ -459,8 +527,8 @@ function ProductsTab() {
 
     // 주요 사양 정리: trim 후 빈 문자열 제거
     const cleanedSpecs = (formData.specs || [])
-      .map(spec => spec.trim())
-      .filter(spec => spec !== '');
+      .map((spec) => spec.trim())
+      .filter((spec) => spec !== "");
 
     const productData = {
       name: formData.name!.trim(),
@@ -472,8 +540,11 @@ function ProductsTab() {
       images: imageUrls,
       description: formData.description || "",
       specs: cleanedSpecs,
-      rating: 4.5,
-      reviewCount: 0
+      // 수정 시에는 기존 rating 유지, 신규 생성 시에는 null (백엔드에서 설정)
+      ...(editingId && {
+        rating: formData.rating,
+        reviewCount: formData.reviewCount,
+      }),
     };
 
     console.log("저장할 상품 데이터:", productData);
@@ -483,55 +554,56 @@ function ProductsTab() {
 
     try {
       const token = await getAccessToken();
-      
+
+      if (!token) {
+        toast.error("로그인이 필요합니다. 다시 로그인해주세요.");
+        return;
+      }
+
+      console.log("사용 중인 토큰:", token.substring(0, 50) + "...");
+
       if (isAdding) {
-        // 새 상����� 추가 - API 호출
-        const response = await fetch(
-          `${API_BASE}/api/products`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(productData)
-          }
-        );
+        // 새 상품 추가 - API 호출
+        const response = await fetch(`${API_BASE}/api/products`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(productData),
+        });
 
         if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.error || 'Failed to add product');
+          const errorData = await response.json();
+          console.error("API 에러 응답:", errorData);
+          throw new Error(errorData.error || "Failed to add product");
         }
 
         const data = await response.json();
         console.log("상품 추가:", data.product);
-        
+
         // 상품 목록 다시 로드
         await loadProducts();
         toast.success("상품이 추가되었습니다!");
-        
       } else if (editingId) {
         // 상품 수정 - API 호출
-        const response = await fetch(
-          `${API_BASE}/api/products/${editingId}`,
-          {
-            method: 'PUT',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(productData)
-          }
-        );
+        const response = await fetch(`${API_BASE}/api/products/${editingId}`, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(productData),
+        });
 
         if (!response.ok) {
           const error = await response.json();
-          throw new Error(error.error || 'Failed to update product');
+          throw new Error(error.error || "Failed to update product");
         }
 
         const data = await response.json();
         console.log("상품 수정:", data.product);
-        
+
         // 상품 목록 다시 로드
         await loadProducts();
         toast.success("상품이 수정되었습니다!");
@@ -541,14 +613,13 @@ function ProductsTab() {
       setEditingId(null);
       setImageFiles([]);
       setImagePreviews([]);
-      
+
       // 중복 클릭 방지를 위한 지연 (2초)
       setTimeout(() => {
         setIsSaving(false);
       }, 2000);
-      
     } catch (error) {
-      console.error('Product save error:', error);
+      console.error("Product save error:", error);
       toast.error(`상품 저장 실패: ${error.message}`);
       setIsSaving(false);
     }
@@ -559,29 +630,25 @@ function ProductsTab() {
 
     try {
       const token = await getAccessToken();
-      const response = await fetch(
-        `${API_BASE}/api/products/${id}`,
-        {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          }
-        }
-      );
+      const response = await fetch(`${API_BASE}/api/products/${id}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Failed to delete product');
+        throw new Error(error.error || "Failed to delete product");
       }
 
       console.log("상품 삭제 ID:", id);
-      
+
       // 상품 목록 다시 로드
       await loadProducts();
       toast.success("상품이 삭제되었습니다!");
-      
     } catch (error) {
-      console.error('Product delete error:', error);
+      console.error("Product delete error:", error);
       toast.error(`상품 삭제 실패: ${error.message}`);
     }
   };
@@ -598,7 +665,7 @@ function ProductsTab() {
     if (!files || files.length === 0) return;
 
     const fileArray = Array.from(files).slice(0, 4); // 최대 4개
-    
+
     if (fileArray.length > 4) {
       toast.error("이미지는 최대 4개까지 업로드할 수 있습니다");
       return;
@@ -611,78 +678,81 @@ function ProductsTab() {
     }
 
     // 미리보기 생성
-    const previewArray = fileArray.map(file => URL.createObjectURL(file));
+    const previewArray = fileArray.map((file) => URL.createObjectURL(file));
     setImagePreviews(previewArray);
-    
+
     // 서버에 업로드
     setIsUploadingImages(true);
     toast.info("이미지 업로드 중...");
-    
+
     const uploadPromises = fileArray.map(async (file) => {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append("file", file);
 
       try {
         const token = await getAccessToken();
-        const response = await fetch(
-          `${API_BASE}/api/upload-image`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-            },
-            body: formData
-          }
-        );
+        const response = await fetch(`${API_BASE}/api/upload-image`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+        });
 
         if (!response.ok) {
           const error = await response.json();
-          throw new Error(error.error || 'Upload failed');
+          throw new Error(error.error || "Upload failed");
         }
 
         const data = await response.json();
         return data.url;
       } catch (error) {
-        console.error('Image upload error:', error);
+        console.error("Image upload error:", error);
         toast.error(`이미지 업로드 실패: ${error.message}`);
         return null;
       }
     });
 
     const uploadedUrls = await Promise.all(uploadPromises);
-    const validUrls = uploadedUrls.filter(url => url !== null);
+    const validUrls = uploadedUrls.filter((url) => url !== null);
 
     if (validUrls.length > 0) {
       // 업로드 완료 후 0.5초 대기 (안정성 확보)
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
       // 업로드된 URL을 formData에 저장 (함수형 업데이트로 최신 상태 보장)
-      setFormData(prev => ({ ...prev, images: validUrls }));
+      setFormData((prev) => ({ ...prev, images: validUrls }));
       toast.success(`${validUrls.length}개 이미지가 업로드되었습니다!`);
       console.log("이미지 업로드 완료:", validUrls);
     } else {
       toast.error("이미지 업로드에 실패했습니다");
       setImagePreviews([]);
     }
-    
+
     setIsUploadingImages(false);
   };
 
-  const filteredProducts = productList.filter(p => {
-    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = selectedCategory === "all" || p.category === selectedCategory;
+  const filteredProducts = productList.filter((p) => {
+    const matchesSearch = p.name
+      .toLowerCase()
+      .includes(searchTerm.toLowerCase());
+    const matchesCategory =
+      selectedCategory === "all" || p.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
 
   const showingForm = isAdding || editingId !== null;
-  
+
   return (
     <div>
       {/* Header */}
       <div className="flex flex-col gap-4 mb-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="relative flex-1 max-w-md w-full">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+            <Search
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+              size={20}
+            />
             <input
               type="text"
               value={searchTerm}
@@ -733,7 +803,9 @@ function ProductsTab() {
       {/* Form */}
       {showingForm && (
         <div className="bg-white border rounded-lg p-6 mb-6">
-          <h3 className="font-bold mb-4">{isAdding ? "새 상품 추가" : "상품 수정"}</h3>
+          <h3 className="font-bold mb-4">
+            {isAdding ? "새 상품 추가" : "상품 수정"}
+          </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="md:col-span-2">
@@ -749,7 +821,9 @@ function ProductsTab() {
                 }`}
                 placeholder="상품명을 입력하세요"
               />
-              {errors.name && <p className="text-red-500 text-xs mt-1">{errors.name}</p>}
+              {errors.name && (
+                <p className="text-red-500 text-xs mt-1">{errors.name}</p>
+              )}
             </div>
 
             <div>
@@ -765,7 +839,9 @@ function ProductsTab() {
                 }`}
                 placeholder="0"
               />
-              {errors.price && <p className="text-red-500 text-xs mt-1">{errors.price}</p>}
+              {errors.price && (
+                <p className="text-red-500 text-xs mt-1">{errors.price}</p>
+              )}
             </div>
 
             <div>
@@ -794,14 +870,20 @@ function ProductsTab() {
                 }`}
               >
                 {categoryList.map((cat) => (
-                  <option key={cat.value} value={cat.value}>{cat.label}</option>
+                  <option key={cat.value} value={cat.value}>
+                    {cat.label}
+                  </option>
                 ))}
               </select>
-              {errors.category && <p className="text-red-500 text-xs mt-1">{errors.category}</p>}
+              {errors.category && (
+                <p className="text-red-500 text-xs mt-1">{errors.category}</p>
+              )}
             </div>
 
             <div>
-              <label className="block text-sm font-bold mb-2">할인율 (자동 계산)</label>
+              <label className="block text-sm font-bold mb-2">
+                할인율 (자동 계산)
+              </label>
               <div className="relative">
                 <input
                   type="number"
@@ -856,13 +938,17 @@ function ProductsTab() {
                         className="w-full h-24 object-cover rounded border-2 border-gray-300"
                       />
                       <div className="absolute top-1 left-1 bg-black text-white text-xs px-2 py-1 rounded">
-                        {index === 0 ? '메인' : index + 1}
+                        {index === 0 ? "메인" : index + 1}
                       </div>
                       <button
                         type="button"
                         onClick={() => {
-                          const newFiles = imageFiles.filter((_, i) => i !== index);
-                          const newPreviews = imagePreviews.filter((_, i) => i !== index);
+                          const newFiles = imageFiles.filter(
+                            (_, i) => i !== index
+                          );
+                          const newPreviews = imagePreviews.filter(
+                            (_, i) => i !== index
+                          );
                           setImageFiles(newFiles);
                           setImagePreviews(newPreviews);
                         }}
@@ -876,22 +962,25 @@ function ProductsTab() {
               )}
 
               {/* Existing Images for Edit Mode */}
-              {editingId && formData.images && formData.images.length > 0 && imagePreviews.length === 0 && (
-                <div className="grid grid-cols-4 gap-3 mt-4">
-                  {formData.images.map((img, index) => (
-                    <div key={index} className="relative">
-                      <img
-                        src={img}
-                        alt={`Product ${index + 1}`}
-                        className="w-full h-24 object-cover rounded border-2 border-gray-300"
-                      />
-                      <div className="absolute top-1 left-1 bg-black text-white text-xs px-2 py-1 rounded">
-                        {index === 0 ? '메인' : index + 1}
+              {editingId &&
+                formData.images &&
+                formData.images.length > 0 &&
+                imagePreviews.length === 0 && (
+                  <div className="grid grid-cols-4 gap-3 mt-4">
+                    {formData.images.map((img, index) => (
+                      <div key={index} className="relative">
+                        <img
+                          src={img}
+                          alt={`Product ${index + 1}`}
+                          className="w-full h-24 object-cover rounded border-2 border-gray-300"
+                        />
+                        <div className="absolute top-1 left-1 bg-black text-white text-xs px-2 py-1 rounded">
+                          {index === 0 ? "메인" : index + 1}
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
             </div>
 
             <div className="md:col-span-2">
@@ -907,10 +996,10 @@ function ProductsTab() {
             <div className="md:col-span-2">
               <label className="block text-sm font-bold mb-2">주요 사양</label>
               <textarea
-                value={(formData.specs || []).join('\n')}
+                value={(formData.specs || []).join("\n")}
                 onChange={(e) => {
                   // 입력 중에는 줄바꿈 허용 (filter 사용 안 함)
-                  const specsArray = e.target.value.split('\n');
+                  const specsArray = e.target.value.split("\n");
                   handleChange("specs", specsArray);
                 }}
                 className="w-full bg-[#eeeeee] rounded border border-[#eeeeee] px-4 py-3 text-sm outline-none focus:border-black min-h-[120px] resize-y"
@@ -934,11 +1023,15 @@ function ProductsTab() {
               disabled={isSaving || isUploadingImages}
               className={`flex-1 rounded px-4 py-3 font-bold ${
                 isSaving || isUploadingImages
-                  ? 'bg-gray-400 text-white cursor-not-allowed'
-                  : 'bg-black text-white hover:bg-gray-800'
+                  ? "bg-gray-400 text-white cursor-not-allowed"
+                  : "bg-black text-white hover:bg-gray-800"
               }`}
             >
-              {isSaving ? '저장 중...' : isUploadingImages ? '이미지 업로드 중...' : '저장'}
+              {isSaving
+                ? "저장 중..."
+                : isUploadingImages
+                ? "이미지 업로드 중..."
+                : "저장"}
             </button>
           </div>
         </div>
@@ -951,20 +1044,32 @@ function ProductsTab() {
             <table className="w-full">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="text-left px-6 py-3 text-sm font-bold">상품명</th>
-                  <th className="text-left px-6 py-3 text-sm font-bold">카테고리</th>
-                  <th className="text-right px-6 py-3 text-sm font-bold">가격</th>
-                  <th className="text-center px-6 py-3 text-sm font-bold">할인</th>
-                  <th className="text-center px-6 py-3 text-sm font-bold">관리</th>
+                  <th className="text-left px-6 py-3 text-sm font-bold">
+                    상품명
+                  </th>
+                  <th className="text-left px-6 py-3 text-sm font-bold">
+                    카테고리
+                  </th>
+                  <th className="text-right px-6 py-3 text-sm font-bold">
+                    가격
+                  </th>
+                  <th className="text-center px-6 py-3 text-sm font-bold">
+                    할인
+                  </th>
+                  <th className="text-center px-6 py-3 text-sm font-bold">
+                    관리
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {filteredProducts.map((product) => (
                   <tr key={product.id} className="border-b hover:bg-gray-50">
                     <td className="px-6 py-4 text-sm">{product.name}</td>
-                    <td className="px-6 py-4 text-sm">{categoryMap[product.category] || product.category}</td>
+                    <td className="px-6 py-4 text-sm">
+                      {categoryMap[product.category] || product.category}
+                    </td>
                     <td className="px-6 py-4 text-sm text-right font-bold">
-                      {product.price.toLocaleString()}원
+                      {(product.price ?? 0).toLocaleString()}원
                     </td>
                     <td className="px-6 py-4 text-sm text-center">
                       {product.hasDiscount && product.discount ? (
@@ -1004,34 +1109,63 @@ function ProductsTab() {
 
 // 유저 관리 탭
 function UsersTab({ logout }: { logout: () => void }) {
-  const { getAccessToken } = useAuth();
+  const { getAccessToken, currentUser } = useAuth();
   const [userList, setUserList] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const itemsPerPage = 10;
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const itemsPerPage = 20; // 서버 사이드 페이지네이션용
+  const [passwordModal, setPasswordModal] = useState<{
+    isOpen: boolean;
+    userId: string;
+    userName: string;
+  }>({ isOpen: false, userId: "", userName: "" });
+  const [newPassword, setNewPassword] = useState("");
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
+  // 배송지 모달 상태
+  const [addressModal, setAddressModal] = useState<{
+    isOpen: boolean;
+    userId: string;
+    userName: string;
+  }>({ isOpen: false, userId: "", userName: "" });
+  const [addresses, setAddresses] = useState<any[]>([]);
+  const [loadingAddresses, setLoadingAddresses] = useState(false);
+
+  // 디바운싱된 검색어
+  const debouncedSearch = useDebounce(searchTerm, 300);
+
+  // 페이지 또는 검색어 변경 시 서버에서 데이터 로드
   useEffect(() => {
-    loadUsers();
-  }, []);
+    loadUsers(currentPage, debouncedSearch);
+  }, [currentPage, debouncedSearch]);
 
-  const loadUsers = async () => {
+  const loadUsers = async (page: number = 1, search: string = "") => {
     try {
       setLoading(true);
       const token = await getAccessToken();
-      
-      const res = await fetch(
-        `${API_BASE}/api/admin/users`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          }
-        }
-      );
-      
+
+      const params = new URLSearchParams({
+        page: page.toString(),
+        perPage: itemsPerPage.toString(),
+        ...(search && { search }),
+      });
+
+      const res = await fetch(`${API_BASE}/api/admin/users?${params}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
       if (res.ok) {
         const data = await res.json();
         setUserList(data.users || []);
+        if (data.pagination) {
+          setTotalCount(data.pagination.total);
+          setTotalPages(data.pagination.totalPages);
+        }
       } else {
         const error = await res.json();
         toast.error(`유저 로드 실패: ${error.error}`);
@@ -1045,30 +1179,27 @@ function UsersTab({ logout }: { logout: () => void }) {
   };
 
   const handleBlockUser = async (userId: string) => {
-    const user = userList.find(u => u.id === userId);
+    const user = userList.find((u) => u.id === userId);
     if (!user) return;
 
     if (user.isBlocked) {
       // 차단 해제
       if (!confirm(`${user.name}님의 차단을 해제하시겠습니까?`)) return;
-      
+
       try {
         const token = await getAccessToken();
-        const res = await fetch(
-          `${API_BASE}/api/admin/users/${userId}/block`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ block: false })
-          }
-        );
-        
+        const res = await fetch(`${API_BASE}/api/admin/users/${userId}/block`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ block: false }),
+        });
+
         if (res.ok) {
           toast.success(`${user.name}님의 차단이 해제되었습니다`);
-          loadUsers();
+          loadUsers(currentPage, debouncedSearch);
         } else {
           const error = await res.json();
           toast.error(`차단 해제 실패: ${error.error}`);
@@ -1079,32 +1210,30 @@ function UsersTab({ logout }: { logout: () => void }) {
       }
     } else {
       // 차단
-      if (!confirm(`${user.name}님을 차단하시겠습니까? 해당 유저는 즉시 로그인할 수 없게 됩니다.`)) return;
-      
+      if (
+        !confirm(
+          `${user.name}님을 차단하시겠습니까? 해당 유저는 즉시 로그인할 수 없게 됩니다.`
+        )
+      )
+        return;
+
       try {
         const token = await getAccessToken();
-        console.log('🟢 [BLOCK] Sending block request for user:', userId);
-        console.log('🟢 [BLOCK] Request body:', { block: true });
-        
-        const res = await fetch(
-          `${API_BASE}/api/admin/users/${userId}/block`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ block: true })
-          }
-        );
-        
-        console.log('🟢 [BLOCK] Response status:', res.status);
+
+        const res = await fetch(`${API_BASE}/api/admin/users/${userId}/block`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ block: true }),
+        });
+
         const responseData = await res.json();
-        console.log('🟢 [BLOCK] Response data:', responseData);
-        
+
         if (res.ok) {
           toast.success(`${user.name}님이 차단되었습니다`);
-          loadUsers();
+          loadUsers(currentPage, debouncedSearch);
         } else {
           toast.error(`차단 실패: ${responseData.error}`);
         }
@@ -1115,24 +1244,91 @@ function UsersTab({ logout }: { logout: () => void }) {
     }
   };
 
-  // 검색: 이름, 이메일, 전화번호로 검색 가능
-  const filteredUsers = userList
-    .filter(u =>
-      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (u.phone && u.phone.includes(searchTerm))
-    )
-    // 가입일자 최신순 정렬 (내림차순)
-    .sort((a, b) => {
-      const dateA = new Date(a.createdAt).getTime();
-      const dateB = new Date(b.createdAt).getTime();
-      return dateB - dateA; // 최신순
-    });
+  // 비밀번호 변경 모달 열기
+  const openPasswordModal = (userId: string, userName: string) => {
+    setPasswordModal({ isOpen: true, userId, userName });
+    setNewPassword("");
+  };
 
-  // 페이지네이션
-  const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedUsers = filteredUsers.slice(startIndex, startIndex + itemsPerPage);
+  // 배송지 조회 함수
+  const loadUserAddresses = async (userId: string, userName: string) => {
+    setAddressModal({ isOpen: true, userId, userName });
+    setLoadingAddresses(true);
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(
+        `${API_BASE}/api/admin/users/${userId}/addresses`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setAddresses(data.addresses || []);
+      } else {
+        toast.error("배송지 조회에 실패했습니다");
+        setAddresses([]);
+      }
+    } catch (error) {
+      console.error("Load addresses error:", error);
+      toast.error("배송지 조회 중 오류 발생");
+      setAddresses([]);
+    } finally {
+      setLoadingAddresses(false);
+    }
+  };
+
+  // 비밀번호 변경 핸들러
+  const handleChangePassword = async () => {
+    if (!newPassword) {
+      toast.error("비밀번호를 입력해주세요");
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error("비밀번호는 8자 이상이어야 합니다");
+      return;
+    }
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(newPassword)) {
+      toast.error("비밀번호는 대문자, 소문자, 숫자를 포함해야 합니다");
+      return;
+    }
+
+    setIsChangingPassword(true);
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(
+        `${API_BASE}/api/admin/users/${passwordModal.userId}/password`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ newPassword }),
+        }
+      );
+
+      if (res.ok) {
+        toast.success(
+          `${passwordModal.userName}님의 비밀번호가 변경되었습니다. 해당 사용자는 재로그인이 필요합니다.`
+        );
+        setPasswordModal({ isOpen: false, userId: "", userName: "" });
+        setNewPassword("");
+      } else {
+        const error = await res.json();
+        toast.error(`비밀번호 변경 실패: ${error.error}`);
+      }
+    } catch (error) {
+      console.error("Error changing password:", error);
+      toast.error("비밀번호 변경 중 오류 발생");
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  // 서버에서 이미 필터링 및 정렬된 데이터 사용
+  const paginatedUsers = userList;
 
   if (loading) {
     return (
@@ -1147,7 +1343,10 @@ function UsersTab({ logout }: { logout: () => void }) {
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+          <Search
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            size={20}
+          />
           <input
             type="text"
             value={searchTerm}
@@ -1168,59 +1367,132 @@ function UsersTab({ logout }: { logout: () => void }) {
             <thead className="bg-gray-50 border-b">
               <tr>
                 <th className="text-left px-6 py-3 text-sm font-bold">이름</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">이메일</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">전화번호</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">가입일</th>
-                <th className="text-center px-6 py-3 text-sm font-bold">상태</th>
-                <th className="text-center px-6 py-3 text-sm font-bold">관리</th>
+                <th className="text-left px-6 py-3 text-sm font-bold">
+                  이메일
+                </th>
+                <th className="text-left px-6 py-3 text-sm font-bold">
+                  전화번호
+                </th>
+                <th className="text-left px-6 py-3 text-sm font-bold">
+                  가입일
+                </th>
+                <th className="text-center px-6 py-3 text-sm font-bold">
+                  상태
+                </th>
+                <th className="text-left px-6 py-3 text-sm font-bold">
+                  IP 정보
+                </th>
+                <th className="text-center px-6 py-3 text-sm font-bold">
+                  관리
+                </th>
               </tr>
             </thead>
             <tbody>
               {paginatedUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-gray-500">
-                    {searchTerm ? "검색 결과가 없습니다" : "등록된 유저가 없습니다"}
+                  <td
+                    colSpan={7}
+                    className="px-6 py-8 text-center text-gray-500"
+                  >
+                    {searchTerm
+                      ? "검색 결과가 없습니다"
+                      : "등록된 유저가 없습니다"}
                   </td>
                 </tr>
               ) : (
                 paginatedUsers.map((user) => (
-                  <tr key={user.id} className={`border-b hover:bg-gray-50 ${user.isBlocked ? 'bg-red-50' : ''}`}>
+                  <tr
+                    key={user.id}
+                    className={`border-b hover:bg-gray-50 ${
+                      user.isBlocked ? "bg-red-50" : ""
+                    }`}
+                  >
                     <td className="px-6 py-4 text-sm font-bold">{user.name}</td>
                     <td className="px-6 py-4 text-sm">{user.email}</td>
                     <td className="px-6 py-4 text-sm">{user.phone || "-"}</td>
                     <td className="px-6 py-4 text-sm">{user.createdAt}</td>
                     <td className="px-6 py-4 text-center">
                       {user.isBlocked ? (
-                        <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">
-                          차단됨
-                        </span>
+                        <div className="flex flex-col items-center">
+                          <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">
+                            차단됨
+                          </span>
+                          {user.blockedAt && (
+                            <span className="text-xs text-gray-500 mt-1">
+                              {new Date(user.blockedAt).toLocaleString(
+                                "ko-KR",
+                                {
+                                  year: "numeric",
+                                  month: "2-digit",
+                                  day: "2-digit",
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                }
+                              )}
+                            </span>
+                          )}
+                        </div>
                       ) : (
                         <span className="bg-green-100 text-green-600 px-2 py-1 rounded text-xs font-bold">
                           정상
                         </span>
                       )}
                     </td>
+                    <td className="px-6 py-4 text-xs text-gray-600">
+                      <div className="flex flex-col gap-1">
+                        <div>
+                          <span className="text-gray-400">가입:</span>{" "}
+                          <span className="font-mono">
+                            {user.signupIp || "-"}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-400">최근:</span>{" "}
+                          <span className="font-mono">
+                            {user.lastLoginIp || "-"}
+                          </span>
+                        </div>
+                      </div>
+                    </td>
                     <td className="px-6 py-4 text-center">
-                      <button
-                        onClick={() => handleBlockUser(user.id)}
-                        className={`px-3 py-1 rounded font-bold text-sm flex items-center gap-1 mx-auto ${
-                          user.isBlocked
-                            ? "bg-green-500 text-white hover:bg-green-600"
-                            : "bg-red-500 text-white hover:bg-red-600"
-                        }`}
-                      >
-                        {user.isBlocked ? (
-                          <>
-                            <CheckCircle size={14} />
-                            차단 해제
-                          </>
-                        ) : (
-                          <>
-                            <Ban size={14} />
-                            차단
-                          </>
-                        )}
-                      </button>
+                      <div className="flex items-center justify-center gap-2 flex-wrap">
+                        <button
+                          onClick={() => loadUserAddresses(user.id, user.name)}
+                          className="px-3 py-1 rounded font-bold text-sm flex items-center gap-1 bg-purple-500 text-white hover:bg-purple-600"
+                          title="배송지 조회"
+                        >
+                          <MapPin size={14} />
+                          배송지
+                        </button>
+                        <button
+                          onClick={() => openPasswordModal(user.id, user.name)}
+                          className="px-3 py-1 rounded font-bold text-sm flex items-center gap-1 bg-blue-500 text-white hover:bg-blue-600"
+                          title="비밀번호 변경"
+                        >
+                          <Key size={14} />
+                          비밀번호
+                        </button>
+                        <button
+                          onClick={() => handleBlockUser(user.id)}
+                          className={`px-3 py-1 rounded font-bold text-sm flex items-center gap-1 ${
+                            user.isBlocked
+                              ? "bg-green-500 text-white hover:bg-green-600"
+                              : "bg-red-500 text-white hover:bg-red-600"
+                          }`}
+                        >
+                          {user.isBlocked ? (
+                            <>
+                              <CheckCircle size={14} />
+                              해제
+                            </>
+                          ) : (
+                            <>
+                              <Ban size={14} />
+                              차단
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -1230,64 +1502,211 @@ function UsersTab({ logout }: { logout: () => void }) {
         </div>
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex justify-center items-center gap-2">
-          <button
-            onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-            disabled={currentPage === 1}
-            className="px-4 py-2 bg-gray-200 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-300"
-          >
-            이전
-          </button>
-          <span className="px-4 py-2 font-bold">
-            {currentPage} / {totalPages}
-          </span>
-          <button
-            onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-            disabled={currentPage === totalPages}
-            className="px-4 py-2 bg-gray-200 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-300"
-          >
-            다음
-          </button>
+      {/* Password Change Modal */}
+      {passwordModal.isOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-bold mb-4">
+              {passwordModal.userName}님의 비밀번호 변경
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              비밀번호 변경 후 해당 사용자는 즉시 로그아웃되며, 새 비밀번호로
+              다시 로그인해야 합니다.
+            </p>
+            <div className="mb-4">
+              <label className="block text-sm font-bold mb-2">
+                새 비밀번호 <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full bg-[#eeeeee] rounded border border-[#eeeeee] px-4 py-3 text-sm outline-none focus:border-black"
+                placeholder="8자 이상, 대문자, 소문자, 숫자 포함"
+                minLength={8}
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setPasswordModal({ isOpen: false, userId: "", userName: "" });
+                  setNewPassword("");
+                }}
+                className="flex-1 bg-gray-200 text-black rounded px-4 py-3 font-bold hover:bg-gray-300"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleChangePassword}
+                disabled={isChangingPassword || newPassword.length < 8}
+                className="flex-1 bg-blue-500 text-white rounded px-4 py-3 font-bold hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isChangingPassword ? "변경 중..." : "변경"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
+
+      {/* Address Modal */}
+      {addressModal.isOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg w-full max-w-2xl mx-4 max-h-[80vh] flex flex-col">
+            <div className="p-6 border-b flex justify-between items-center">
+              <h3 className="text-lg font-bold">
+                {addressModal.userName}님의 배송지 목록
+              </h3>
+              <button
+                onClick={() =>
+                  setAddressModal({ isOpen: false, userId: "", userName: "" })
+                }
+                className="p-2 hover:bg-gray-100 rounded"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              {loadingAddresses ? (
+                <div className="text-center py-8">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-300 border-t-black"></div>
+                  <p className="mt-2 text-gray-600">로딩 중...</p>
+                </div>
+              ) : addresses.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  등록된 배송지가 없습니다
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {addresses.map((addr, index) => (
+                    <div
+                      key={addr.id}
+                      className={`p-4 border rounded-lg ${
+                        addr.is_default ? "border-yellow-400 bg-yellow-50" : ""
+                      }`}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            {addr.is_default && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-bold rounded">
+                                <Star size={12} className="fill-yellow-500" />
+                                기본 배송지
+                              </span>
+                            )}
+                            <span className="font-bold">
+                              {addr.name || `배송지 ${index + 1}`}
+                            </span>
+                          </div>
+                          <div className="text-sm space-y-1">
+                            <p>
+                              <span className="text-gray-500">수령인:</span>{" "}
+                              {addr.recipient}
+                            </p>
+                            <p>
+                              <span className="text-gray-500">연락처:</span>{" "}
+                              {addr.phone}
+                            </p>
+                            <p>
+                              <span className="text-gray-500">주소:</span> (
+                              {addr.postal_code}) {addr.address}
+                              {addr.detail_address && ` ${addr.detail_address}`}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-xs text-gray-400">
+                        등록일:{" "}
+                        {(() => {
+                          const d = new Date(addr.created_at);
+                          return `${d.getFullYear()}. ${
+                            d.getMonth() + 1
+                          }. ${d.getDate()}. ${String(d.getHours()).padStart(
+                            2,
+                            "0"
+                          )}:${String(d.getMinutes()).padStart(
+                            2,
+                            "0"
+                          )}:${String(d.getSeconds()).padStart(2, "0")}`;
+                        })()}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t">
+              <p className="text-sm text-gray-500">
+                총 {addresses.length}개의 배송지
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pagination */}
+      <Pagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        totalItems={totalCount}
+        itemsPerPage={itemsPerPage}
+        onPageChange={(page) => setCurrentPage(page)}
+      />
     </div>
   );
 }
 
 // 관리자 관리 탭
 function AdminsTab() {
-  const { getAccessToken } = useAuth();
+  const { getAccessToken, currentUser } = useAuth();
   const [adminList, setAdminList] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const itemsPerPage = 10;
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const itemsPerPage = 20;
   const [isAdding, setIsAdding] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [passwordModal, setPasswordModal] = useState<{
+    isOpen: boolean;
+    adminId: string;
+    adminName: string;
+  }>({ isOpen: false, adminId: "", adminName: "" });
+  const [newPassword, setNewPassword] = useState("");
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
+  // 디바운싱된 검색어
+  const debouncedSearch = useDebounce(searchTerm, 300);
+
+  // 페이지 또는 검색어 변경 시 서버에서 데이터 로드
   useEffect(() => {
-    loadAdmins();
-  }, []);
+    loadAdmins(currentPage, debouncedSearch);
+  }, [currentPage, debouncedSearch]);
 
-  const loadAdmins = async () => {
+  const loadAdmins = async (page: number = 1, search: string = "") => {
     try {
       setLoading(true);
       const token = await getAccessToken();
-      
-      const res = await fetch(
-        `${API_BASE}/api/admin/admins`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          }
-        }
-      );
-      
+
+      const params = new URLSearchParams({
+        page: page.toString(),
+        perPage: itemsPerPage.toString(),
+        ...(search && { search }),
+      });
+
+      const res = await fetch(`${API_BASE}/api/admin/admins?${params}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
       if (res.ok) {
         const data = await res.json();
         setAdminList(data.admins || []);
+        if (data.pagination) {
+          setTotalCount(data.pagination.total);
+          setTotalPages(data.pagination.totalPages);
+        }
       } else {
         const error = await res.json();
         toast.error(`관리자 로드 실패: ${error.error}`);
@@ -1303,13 +1722,13 @@ function AdminsTab() {
   const [formData, setFormData] = useState({
     name: "",
     email: "",
-    password: ""
+    password: "",
   });
 
   const [errors, setErrors] = useState({
     name: "",
     email: "",
-    password: ""
+    password: "",
   });
 
   const validateName = (name: string): string => {
@@ -1328,6 +1747,9 @@ function AdminsTab() {
   const validatePassword = (password: string): string => {
     if (!password) return "비밀번호를 입력해주세요";
     if (password.length < 8) return "비밀번호는 8자 이상이어야 합니다";
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(password)) {
+      return "비밀번호는 대문자, 소문자, 숫자를 포함해야 합니다";
+    }
     return "";
   };
 
@@ -1348,12 +1770,12 @@ function AdminsTab() {
     setFormData({
       name: "",
       email: "",
-      password: ""
+      password: "",
     });
     setErrors({
       name: "",
       email: "",
-      password: ""
+      password: "",
     });
   };
 
@@ -1362,12 +1784,12 @@ function AdminsTab() {
     setFormData({
       name: "",
       email: "",
-      password: ""
+      password: "",
     });
     setErrors({
       name: "",
       email: "",
-      password: ""
+      password: "",
     });
   };
 
@@ -1375,12 +1797,12 @@ function AdminsTab() {
     const validationErrors = {
       name: validateName(formData.name),
       email: validateEmail(formData.email),
-      password: validatePassword(formData.password)
+      password: validatePassword(formData.password),
     };
 
     setErrors(validationErrors);
 
-    if (Object.values(validationErrors).some(error => error !== "")) {
+    if (Object.values(validationErrors).some((error) => error !== "")) {
       toast.error("입력 정보를 확인해주세요");
       return;
     }
@@ -1395,23 +1817,20 @@ function AdminsTab() {
         setIsCreating(false);
         return;
       }
-      
-      const response = await fetch(
-        `${API_BASE}/api/create-admin`,
-        {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(formData)
-        }
-      );
+
+      const response = await fetch(`${API_BASE}/api/create-admin`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(formData),
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create admin');
+        throw new Error(data.error || "Failed to create admin");
       }
 
       toast.success(`${formData.name}님이 관리자로 등록되었습니다!`);
@@ -1419,7 +1838,7 @@ function AdminsTab() {
       handleCancel();
       loadAdmins(); // Reload admin list
     } catch (error) {
-      console.error('Admin creation error:', error);
+      console.error("Admin creation error:", error);
       toast.error(`관리자 생성 실패: ${error.message}`);
     } finally {
       setIsCreating(false);
@@ -1427,72 +1846,105 @@ function AdminsTab() {
   };
 
   const handleDeleteAdmin = async (userId: string) => {
-    const user = adminList.find(u => u.id === userId);
+    const user = adminList.find((u) => u.id === userId);
     if (!user) return;
 
-    if (confirm(`${user.name}님을 관리자 목록에서 삭제하시겠습니까?`)) {
-      toast.info("현재는 관리자 삭제 기능이 구현되지 않았습니다. Supabase Dashboard에서 직접 삭제해주세요.");
-      // TODO: Implement admin deletion API
-    }
-  };
-
-  const handleBlockAdmin = async (userId: string) => {
-    const user = adminList.find(u => u.id === userId);
-    if (!user) return;
-
-    const action = user.isBlocked ? "차단 해제" : "차단";
-    
-    if (confirm(`${user.name}님을 ${action}하시겠습니까?`)) {
+    if (
+      confirm(
+        `${user.name}님의 계정을 완전히 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`
+      )
+    ) {
       try {
         const token = await getAccessToken();
-        const url = `${API_BASE}/api/admin/admins/${userId}/block`;
-        console.log('Blocking admin - URL:', url);
-        console.log('Blocking admin - Method:', 'POST');
-        console.log('Blocking admin - Body:', { block: !user.isBlocked });
-        
-        const response = await fetch(url, {
-          method: 'POST',
+        const response = await fetch(`${API_BASE}/api/admin/admins/${userId}`, {
+          method: "DELETE",
           headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({ block: !user.isBlocked })
         });
 
-        console.log('Block response status:', response.status);
-        
         if (!response.ok) {
           const error = await response.json();
-          console.error('Block error response:', error);
-          throw new Error(error.error || `Failed to ${action} admin`);
+          throw new Error(error.error || "Failed to delete admin");
         }
 
-        toast.success(`${user.name}님이 ${action}되었습니다!`);
+        toast.success(`${user.name}님의 계정이 삭제되었습니다.`);
         loadAdmins(); // Reload admin list
-      } catch (error) {
-        console.error('Block admin error:', error);
-        toast.error(`관리자 ${action} 실패: ${error.message}`);
+      } catch (error: any) {
+        console.error("Delete admin error:", error);
+        toast.error(`관리자 삭제 실패: ${error.message}`);
       }
     }
   };
 
-  // 검색: 이름, 이메일로 검색 가능
-  const filteredAdmins = adminList
-    .filter(u =>
-      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchTerm.toLowerCase())
-    )
-    // 가입일자 최신순 정렬 (내림차순)
-    .sort((a, b) => {
-      const dateA = new Date(a.createdAt).getTime();
-      const dateB = new Date(b.createdAt).getTime();
-      return dateB - dateA; // 최신순
-    });
+  // 비밀번호 변경 모달 열기
+  const openPasswordModal = (adminId: string, adminName: string) => {
+    setPasswordModal({ isOpen: true, adminId, adminName });
+    setNewPassword("");
+  };
 
-  // 페이지네이션
-  const totalPages = Math.ceil(filteredAdmins.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedAdmins = filteredAdmins.slice(startIndex, startIndex + itemsPerPage);
+  // 비밀번호 변경 핸들러
+  const handleChangePassword = async () => {
+    if (!newPassword) {
+      toast.error("비밀번호를 입력해주세요");
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error("비밀번호는 8자 이상이어야 합니다");
+      return;
+    }
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(newPassword)) {
+      toast.error("비밀번호는 대문자, 소문자, 숫자를 포함해야 합니다");
+      return;
+    }
+
+    // 자신의 비밀번호를 변경하는 경우 경고
+    if (passwordModal.adminId === currentUser?.id) {
+      if (
+        !confirm(
+          "자신의 비밀번호를 변경하면 즉시 로그아웃됩니다. 계속하시겠습니까?"
+        )
+      ) {
+        return;
+      }
+    }
+
+    setIsChangingPassword(true);
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(
+        `${API_BASE}/api/admin/admins/${passwordModal.adminId}/password`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ newPassword }),
+        }
+      );
+
+      if (res.ok) {
+        toast.success(
+          `${passwordModal.adminName}님의 비밀번호가 변경되었습니다. 해당 관리자는 재로그인이 필요합니다.`
+        );
+        setPasswordModal({ isOpen: false, adminId: "", adminName: "" });
+        setNewPassword("");
+      } else {
+        const error = await res.json();
+        toast.error(`비밀번호 변경 실패: ${error.error}`);
+      }
+    } catch (error) {
+      console.error("Error changing password:", error);
+      toast.error("비밀번호 변경 중 오류 발생");
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  // 서버에서 이미 필터링 및 정렬된 데이터 사용
+  const paginatedAdmins = adminList;
 
   if (loading) {
     return (
@@ -1507,7 +1959,10 @@ function AdminsTab() {
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+          <Search
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            size={20}
+          />
           <input
             type="text"
             value={searchTerm}
@@ -1537,15 +1992,31 @@ function AdminsTab() {
             <thead className="bg-gray-50 border-b">
               <tr>
                 <th className="text-left px-6 py-3 text-sm font-bold">이름</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">이메일</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">가입일</th>
-                <th className="text-center px-6 py-3 text-sm font-bold">상태</th>
-                <th className="text-center px-6 py-3 text-sm font-bold">관리</th>
+                <th className="text-left px-6 py-3 text-sm font-bold">
+                  이메일
+                </th>
+                <th className="text-left px-6 py-3 text-sm font-bold">
+                  가입일
+                </th>
+                <th className="text-center px-6 py-3 text-sm font-bold">
+                  상태
+                </th>
+                <th className="text-left px-6 py-3 text-sm font-bold">
+                  IP 정보
+                </th>
+                <th className="text-center px-6 py-3 text-sm font-bold">
+                  관리
+                </th>
               </tr>
             </thead>
             <tbody>
               {paginatedAdmins.map((user) => (
-                <tr key={user.id} className={`border-b hover:bg-gray-50 ${user.isBlocked ? 'bg-red-50' : ''}`}>
+                <tr
+                  key={user.id}
+                  className={`border-b hover:bg-gray-50 ${
+                    user.isBlocked ? "bg-red-50" : ""
+                  }`}
+                >
                   <td className="px-6 py-4 text-sm font-bold">{user.name}</td>
                   <td className="px-6 py-4 text-sm">{user.email}</td>
                   <td className="px-6 py-4 text-sm">{user.createdAt}</td>
@@ -1555,8 +2026,16 @@ function AdminsTab() {
                         <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-bold">
                           차단됨
                         </span>
-                        {user.blockedIp && (
-                          <span className="text-xs text-gray-500 mt-1">IP: {user.blockedIp}</span>
+                        {user.blockedAt && (
+                          <span className="text-xs text-gray-500 mt-1">
+                            {new Date(user.blockedAt).toLocaleString("ko-KR", {
+                              year: "numeric",
+                              month: "2-digit",
+                              day: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
                         )}
                       </div>
                     ) : (
@@ -1565,27 +2044,31 @@ function AdminsTab() {
                       </span>
                     )}
                   </td>
+                  <td className="px-6 py-4 text-xs text-gray-600">
+                    <div className="flex flex-col gap-1">
+                      <div>
+                        <span className="text-gray-400">가입:</span>{" "}
+                        <span className="font-mono">
+                          {user.signupIp || "-"}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-gray-400">최근:</span>{" "}
+                        <span className="font-mono">
+                          {user.lastLoginIp || "-"}
+                        </span>
+                      </div>
+                    </div>
+                  </td>
                   <td className="px-6 py-4 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <button
-                        onClick={() => handleBlockAdmin(user.id)}
-                        className={`px-3 py-1 rounded font-bold text-sm flex items-center gap-1 ${
-                          user.isBlocked
-                            ? "bg-green-500 text-white hover:bg-green-600"
-                            : "bg-yellow-500 text-white hover:bg-yellow-600"
-                        }`}
+                        onClick={() => openPasswordModal(user.id, user.name)}
+                        className="px-3 py-1 rounded font-bold text-sm flex items-center gap-1 bg-blue-500 text-white hover:bg-blue-600"
+                        title="비밀번호 변경"
                       >
-                        {user.isBlocked ? (
-                          <>
-                            <CheckCircle size={14} />
-                            차단 해제
-                          </>
-                        ) : (
-                          <>
-                            <Ban size={14} />
-                            차단
-                          </>
-                        )}
+                        <Key size={14} />
+                        비밀번호
                       </button>
                       <button
                         onClick={() => handleDeleteAdmin(user.id)}
@@ -1602,6 +2085,56 @@ function AdminsTab() {
           </table>
         </div>
       </div>
+
+      {/* Password Change Modal */}
+      {passwordModal.isOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md mx-4">
+            <h3 className="text-lg font-bold mb-4">
+              {passwordModal.adminName}님의 비밀번호 변경
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              비밀번호 변경 후 해당 관리자는 즉시 로그아웃되며, 새 비밀번호로
+              다시 로그인해야 합니다.
+            </p>
+            <div className="mb-4">
+              <label className="block text-sm font-bold mb-2">
+                새 비밀번호 <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full bg-[#eeeeee] rounded border border-[#eeeeee] px-4 py-3 text-sm outline-none focus:border-black"
+                placeholder="8자 이상, 대문자, 소문자, 숫자 포함"
+                minLength={8}
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  setPasswordModal({
+                    isOpen: false,
+                    adminId: "",
+                    adminName: "",
+                  });
+                  setNewPassword("");
+                }}
+                className="flex-1 bg-gray-200 text-black rounded px-4 py-3 font-bold hover:bg-gray-300"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleChangePassword}
+                disabled={isChangingPassword || newPassword.length < 8}
+                className="flex-1 bg-blue-500 text-white rounded px-4 py-3 font-bold hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isChangingPassword ? "변경 중..." : "변경"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Form */}
       {isAdding && (
@@ -1622,7 +2155,9 @@ function AdminsTab() {
                 }`}
                 placeholder="이름을 입력하세요"
               />
-              {errors.name && <p className="text-red-500 text-xs mt-1">{errors.name}</p>}
+              {errors.name && (
+                <p className="text-red-500 text-xs mt-1">{errors.name}</p>
+              )}
             </div>
 
             <div>
@@ -1638,7 +2173,9 @@ function AdminsTab() {
                 }`}
                 placeholder="이메일을 입력하세요"
               />
-              {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
+              {errors.email && (
+                <p className="text-red-500 text-xs mt-1">{errors.email}</p>
+              )}
             </div>
 
             <div>
@@ -1654,7 +2191,9 @@ function AdminsTab() {
                 }`}
                 placeholder="비밀번호를 입력하세요"
               />
-              {errors.password && <p className="text-red-500 text-xs mt-1">{errors.password}</p>}
+              {errors.password && (
+                <p className="text-red-500 text-xs mt-1">{errors.password}</p>
+              )}
             </div>
           </div>
 
@@ -1677,27 +2216,13 @@ function AdminsTab() {
       )}
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex justify-center items-center gap-2">
-          <button
-            onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-            disabled={currentPage === 1}
-            className="px-4 py-2 bg-gray-200 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-300"
-          >
-            이전
-          </button>
-          <span className="px-4 py-2 font-bold">
-            {currentPage} / {totalPages}
-          </span>
-          <button
-            onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-            disabled={currentPage === totalPages}
-            className="px-4 py-2 bg-gray-200 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-300"
-          >
-            다음
-          </button>
-        </div>
-      )}
+      <Pagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        totalItems={totalCount}
+        itemsPerPage={itemsPerPage}
+        onPageChange={(page) => setCurrentPage(page)}
+      />
     </div>
   );
 }
@@ -1709,43 +2234,60 @@ function OrdersTab() {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const itemsPerPage = 10;
+  const [totalCount, setTotalCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const itemsPerPage = 20;
 
-  // 주문 목록 로드
+  // 디바운싱된 검색어
+  const debouncedSearch = useDebounce(searchTerm, 300);
+
+  // 페이지 또는 검색어 변경 시 서버에서 데이터 로드
   useEffect(() => {
-    const loadOrders = async () => {
-      try {
-        const token = await getAccessToken();
-        if (!token) return;
+    loadOrders(currentPage, debouncedSearch);
+  }, [currentPage, debouncedSearch]);
 
-        const response = await fetch(
-          `${API_BASE}/api/admin/orders`,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-            }
-          }
-        );
+  // 주문 목록 로드 함수
+  const loadOrders = async (page: number = 1, search: string = "") => {
+    try {
+      setLoading(true);
+      const token = await getAccessToken();
+      if (!token) return;
 
-        if (response.ok) {
-          const data = await response.json();
-          setOrderList(data.orders || []);
-        } else {
-          console.error('Failed to load orders');
-          setOrderList([]);
+      const params = new URLSearchParams({
+        page: page.toString(),
+        perPage: itemsPerPage.toString(),
+        ...(search && { search }),
+      });
+
+      const response = await fetch(`${API_BASE}/api/admin/orders?${params}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setOrderList(data.orders || []);
+        if (data.pagination) {
+          setTotalCount(data.pagination.total);
+          setTotalPages(data.pagination.totalPages);
         }
-      } catch (error) {
-        console.error('Failed to load orders:', error);
+      } else {
+        console.error("Failed to load orders");
         setOrderList([]);
-      } finally {
-        setLoading(false);
       }
-    };
+    } catch (error) {
+      console.error("Failed to load orders:", error);
+      setOrderList([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    loadOrders();
-  }, []);
-
-  const handleStatusChange = async (orderId: string, newStatus: Order["status"]) => {
+  const handleStatusChange = async (
+    orderId: string,
+    newStatus: Order["status"]
+  ) => {
     try {
       const token = await getAccessToken();
       if (!token) {
@@ -1753,47 +2295,38 @@ function OrdersTab() {
         return;
       }
 
-      const response = await fetch(
-        `${API_BASE}/api/orders/${orderId}/status`,
-        {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ status: newStatus })
-        }
-      );
+      const response = await fetch(`${API_BASE}/api/orders/${orderId}/status`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
 
       if (response.ok) {
         const data = await response.json();
-        // 주문 목록 업데이트
-        setOrderList(orderList.map(order => 
-          order.id === orderId ? data.order : order
-        ));
+        // 주문 목록 업데이트 - status 필드만 사용 (백엔드에서 shippingStatus를 status로 매핑)
+        setOrderList(
+          orderList.map((order) =>
+            order.id === orderId ? { ...order, status: newStatus } : order
+          )
+        );
         toast.success("배송 상태가 변경되었습니다!");
+
+        // 주문 목록 새로고침 제거
       } else {
-        toast.error("배송 상태 변경에 실패했습니다");
+        const errorData = await response.json();
+        toast.error(errorData.error || "배송 상태 변경에 실패했습니다");
       }
     } catch (error) {
-      console.error('Failed to update order status:', error);
+      console.error("Failed to update order status:", error);
       toast.error("배송 상태 변경에 실패했습니다");
     }
   };
 
-  // 검색: 주문번호, 수령인, 연락처, 배송지로 검색 가능
-  const filteredOrders = orderList.filter(o =>
-    o.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    o.shippingAddress.recipient.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    o.shippingAddress.phone.includes(searchTerm) ||
-    o.shippingAddress.address.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    o.shippingAddress.detailAddress.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  // 페이지네이션
-  const totalPages = Math.ceil(filteredOrders.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedOrders = filteredOrders.slice(startIndex, startIndex + itemsPerPage);
+  // 서버에서 이미 필터링 및 정렬된 데이터 사용
+  const paginatedOrders = orderList;
 
   if (loading) {
     return (
@@ -1808,7 +2341,10 @@ function OrdersTab() {
       {/* Header */}
       <div className="flex justify-between items-center mb-6">
         <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+          <Search
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+            size={20}
+          />
           <input
             type="text"
             value={searchTerm}
@@ -1825,44 +2361,73 @@ function OrdersTab() {
       {/* Orders Table */}
       <div className="bg-white border rounded-lg overflow-hidden mb-4">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="w-full min-w-[1000px]">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-6 py-3 text-sm font-bold">주문번호</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">주문일시</th>
-                <th className="text-right px-6 py-3 text-sm font-bold">주문금액</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">수령인</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">연락처</th>
-                <th className="text-left px-6 py-3 text-sm font-bold">배송지</th>
-                <th className="text-center px-6 py-3 text-sm font-bold">배송상태</th>
+                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[120px]">
+                  주문번호
+                </th>
+                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[150px]">
+                  주문일시
+                </th>
+                <th className="text-right px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[100px]">
+                  주문금액
+                </th>
+                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[80px]">
+                  수령인
+                </th>
+                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[120px]">
+                  연락처
+                </th>
+                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[200px]">
+                  배송지
+                </th>
+                <th className="text-center px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[130px]">
+                  배송상태
+                </th>
               </tr>
             </thead>
             <tbody>
               {paginatedOrders.map((order) => (
                 <tr key={order.id} className="border-b hover:bg-gray-50">
-                  <td className="px-6 py-4 text-sm font-bold">{order.id}</td>
-                  <td className="px-6 py-4 text-sm">{order.date}</td>
-                  <td className="px-6 py-4 text-sm text-right font-bold">
-                    {order.totalAmount.toLocaleString()}원
+                  <td className="px-4 py-4 text-sm font-bold whitespace-nowrap">
+                    <span className="font-mono text-xs">
+                      {order.id?.substring(0, 8) || "-"}...
+                    </span>
                   </td>
-                  <td className="px-6 py-4 text-sm font-bold">
-                    {order.shippingAddress.recipient}
+                  <td className="px-4 py-4 text-sm whitespace-nowrap">
+                    {order.date || "날짜 없음"}
                   </td>
-                  <td className="px-6 py-4 text-sm">
-                    {order.shippingAddress.phone}
+                  <td className="px-4 py-4 text-sm text-right font-bold whitespace-nowrap">
+                    {(order.totalAmount ?? 0).toLocaleString()}원
                   </td>
-                  <td className="px-6 py-4 text-sm">
-                    <div>
-                      <p className="text-xs text-gray-600">
-                        {order.shippingAddress.address} {order.shippingAddress.detailAddress}
-                      </p>
+                  <td className="px-4 py-4 text-sm font-bold whitespace-nowrap">
+                    {order.shippingAddress?.recipient || "수령인 없음"}
+                  </td>
+                  <td className="px-4 py-4 text-sm whitespace-nowrap">
+                    {order.shippingAddress?.phone || "-"}
+                  </td>
+                  <td className="px-4 py-4 text-sm">
+                    <div
+                      className="max-w-[200px] truncate"
+                      title={`${order.shippingAddress?.address || ""} ${
+                        order.shippingAddress?.detailAddress || ""
+                      }`}
+                    >
+                      {order.shippingAddress?.address || ""}{" "}
+                      {order.shippingAddress?.detailAddress || ""}
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-center">
+                  <td className="px-4 py-4 text-center">
                     <select
                       value={order.status}
-                      onChange={(e) => handleStatusChange(order.id, e.target.value as Order["status"])}
-                      className="bg-[#eeeeee] rounded border border-[#eeeeee] px-3 py-2 text-sm font-bold outline-none focus:border-black"
+                      onChange={(e) =>
+                        handleStatusChange(
+                          order.id,
+                          e.target.value as Order["status"]
+                        )
+                      }
+                      className="bg-[#eeeeee] rounded border border-[#eeeeee] px-2 py-1.5 text-xs font-bold outline-none focus:border-black whitespace-nowrap"
                     >
                       <option value="배송 준비 중">배송 준비 중</option>
                       <option value="배송 중">배송 중</option>
@@ -1878,27 +2443,13 @@ function OrdersTab() {
       </div>
 
       {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex justify-center items-center gap-2">
-          <button
-            onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-            disabled={currentPage === 1}
-            className="px-4 py-2 bg-gray-200 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-300"
-          >
-            이전
-          </button>
-          <span className="px-4 py-2 font-bold">
-            {currentPage} / {totalPages}
-          </span>
-          <button
-            onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-            disabled={currentPage === totalPages}
-            className="px-4 py-2 bg-gray-200 rounded font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-300"
-          >
-            다음
-          </button>
-        </div>
-      )}
+      <Pagination
+        currentPage={currentPage}
+        totalPages={totalPages}
+        totalItems={totalCount}
+        itemsPerPage={itemsPerPage}
+        onPageChange={(page) => setCurrentPage(page)}
+      />
     </div>
   );
 }
