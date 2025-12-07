@@ -30,10 +30,5 @@
         }
       ]
     }
-  ],
-  "env": {
-    "VITE_SUPABASE_PROJECT_ID": "@vite_supabase_project_id",
-    "VITE_SUPABASE_ANON_KEY": "@vite_supabase_anon_key",
-    "VITE_API_ENDPOINT": "@vite_api_endpoint"
-  }
+  ]
 }
