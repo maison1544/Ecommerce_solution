@@ -79,10 +79,17 @@ CREATE TABLE IF NOT EXISTS addresses (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- user_accounts의 default_address_id FK 추가
-ALTER TABLE user_accounts 
-ADD CONSTRAINT user_accounts_default_address_id_fkey 
-FOREIGN KEY (default_address_id) REFERENCES addresses(id) ON DELETE SET NULL;
+-- user_accounts의 default_address_id FK 추가 (이미 있으면 무시)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_accounts_default_address_id_fkey'
+  ) THEN
+    ALTER TABLE user_accounts 
+    ADD CONSTRAINT user_accounts_default_address_id_fkey 
+    FOREIGN KEY (default_address_id) REFERENCES addresses(id) ON DELETE SET NULL;
+  END IF;
+END $$;
 
 -- ============================================
 -- 5. CART_ITEMS 테이블 (장바구니)
@@ -281,10 +288,190 @@ CREATE INDEX IF NOT EXISTS idx_inquiries_status ON inquiries(status);
 CREATE INDEX IF NOT EXISTS idx_login_attempts_email ON login_attempts(email);
 
 -- ============================================
+-- RPC FUNCTIONS (장바구니, 리뷰 등)
+-- ============================================
+
+-- 1. add_cart_item: 단일 아이템 빠른 추가/수량 업데이트
+CREATE OR REPLACE FUNCTION add_cart_item(
+  p_user_id UUID,
+  p_product_id INTEGER,
+  p_product_name TEXT,
+  p_price NUMERIC,
+  p_original_price NUMERIC,
+  p_quantity INTEGER,
+  p_image TEXT DEFAULT ''
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_existing_id BIGINT;
+  v_new_quantity INTEGER;
+  v_result JSON;
+BEGIN
+  -- 기존 아이템 확인
+  SELECT id, quantity INTO v_existing_id, v_new_quantity
+  FROM cart_items
+  WHERE user_id = p_user_id AND product_id = p_product_id;
+
+  IF v_existing_id IS NOT NULL THEN
+    -- 기존 아이템 수량 업데이트
+    v_new_quantity := v_new_quantity + p_quantity;
+    
+    UPDATE cart_items
+    SET quantity = v_new_quantity,
+        updated_at = NOW()
+    WHERE id = v_existing_id;
+    
+    v_result := json_build_object(
+      'action', 'updated',
+      'id', v_existing_id,
+      'quantity', v_new_quantity
+    );
+  ELSE
+    -- 새 아이템 추가
+    INSERT INTO cart_items (user_id, product_id, product_name, price, original_price, quantity, image)
+    VALUES (p_user_id, p_product_id, p_product_name, p_price, p_original_price, p_quantity, p_image)
+    RETURNING id INTO v_existing_id;
+    
+    v_result := json_build_object(
+      'action', 'inserted',
+      'id', v_existing_id,
+      'quantity', p_quantity
+    );
+  END IF;
+
+  RETURN v_result;
+END;
+$$;
+
+-- 2. sync_cart_items: 전체 장바구니 동기화
+CREATE OR REPLACE FUNCTION sync_cart_items(
+  p_user_id UUID,
+  p_cart_items JSONB
+)
+RETURNS JSON
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  v_item JSONB;
+  v_product_id INTEGER;
+  v_inserted INTEGER := 0;
+  v_updated INTEGER := 0;
+  v_deleted INTEGER := 0;
+  v_new_product_ids INTEGER[];
+BEGIN
+  -- 새 장바구니의 product_id 목록 추출
+  SELECT ARRAY_AGG((item->>'product_id')::INTEGER)
+  INTO v_new_product_ids
+  FROM jsonb_array_elements(p_cart_items) AS item;
+
+  -- 장바구니가 비어있으면 전체 삭제
+  IF v_new_product_ids IS NULL OR array_length(v_new_product_ids, 1) IS NULL THEN
+    DELETE FROM cart_items WHERE user_id = p_user_id;
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+    RETURN json_build_object('inserted', 0, 'updated', 0, 'deleted', v_deleted);
+  END IF;
+
+  -- 새 장바구니에 없는 아이템 삭제
+  DELETE FROM cart_items 
+  WHERE user_id = p_user_id 
+    AND product_id != ALL(v_new_product_ids);
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+
+  -- 각 아이템 UPSERT
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_cart_items)
+  LOOP
+    v_product_id := (v_item->>'product_id')::INTEGER;
+    
+    INSERT INTO cart_items (
+      user_id, product_id, product_name, price, original_price, 
+      has_discount, discount, quantity, image
+    )
+    VALUES (
+      p_user_id,
+      v_product_id,
+      v_item->>'product_name',
+      (v_item->>'price')::NUMERIC,
+      COALESCE((v_item->>'original_price')::NUMERIC, (v_item->>'price')::NUMERIC),
+      COALESCE((v_item->>'has_discount')::BOOLEAN, FALSE),
+      COALESCE((v_item->>'discount')::INTEGER, 0),
+      COALESCE((v_item->>'quantity')::INTEGER, 1),
+      COALESCE(v_item->>'image', '')
+    )
+    ON CONFLICT (user_id, product_id) DO UPDATE SET
+      product_name = EXCLUDED.product_name,
+      price = EXCLUDED.price,
+      original_price = EXCLUDED.original_price,
+      has_discount = EXCLUDED.has_discount,
+      discount = EXCLUDED.discount,
+      quantity = EXCLUDED.quantity,
+      image = EXCLUDED.image,
+      updated_at = NOW();
+      
+    IF FOUND THEN
+      v_updated := v_updated + 1;
+    ELSE
+      v_inserted := v_inserted + 1;
+    END IF;
+  END LOOP;
+
+  RETURN json_build_object('inserted', v_inserted, 'updated', v_updated, 'deleted', v_deleted);
+END;
+$$;
+
+-- 3. 리뷰 좋아요 증가
+CREATE OR REPLACE FUNCTION increment_review_likes(review_id BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  UPDATE reviews SET likes = COALESCE(likes, 0) + 1 WHERE id = review_id;
+END;
+$$;
+
+-- 4. 리뷰 좋아요 감소
+CREATE OR REPLACE FUNCTION decrement_review_likes(review_id BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  UPDATE reviews SET likes = GREATEST(COALESCE(likes, 0) - 1, 0) WHERE id = review_id;
+END;
+$$;
+
+-- ============================================
+-- REALTIME 활성화 (관리자 알림용)
+-- ============================================
+-- orders, inquiries 테이블의 실시간 변경 감지
+
+-- 기존에 있으면 무시, 없으면 추가
+DO $$
+BEGIN
+  -- orders 테이블 Realtime 추가
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE orders;
+  EXCEPTION WHEN duplicate_object THEN
+    NULL; -- 이미 있으면 무시
+  END;
+  
+  -- inquiries 테이블 Realtime 추가
+  BEGIN
+    ALTER PUBLICATION supabase_realtime ADD TABLE inquiries;
+  EXCEPTION WHEN duplicate_object THEN
+    NULL; -- 이미 있으면 무시
+  END;
+END $$;
+
+-- ============================================
 -- 완료 메시지
 -- ============================================
 -- 스키마 생성 완료!
 -- 다음 단계:
--- 1. Edge Function 배포: supabase functions deploy shop-api
--- 2. 환경 변수 설정
--- 3. 관리자 계정 생성 (Edge Function API 통해)
+-- 1. Edge Function 배포 (Supabase Dashboard에서)
+-- 2. 환경 변수 설정 (.env 파일)
+-- 3. 관리자 계정 생성 (회원가입 후 SQL로 역할 변경)
