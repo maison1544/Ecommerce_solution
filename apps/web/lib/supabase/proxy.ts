@@ -1,14 +1,23 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { getSupabaseCookieOptions } from "./config";
+import { getSupabaseCookieOptions, type AppInstance } from "./config";
 
-export async function updateSession(request: NextRequest) {
+export async function updateSession(
+  request: NextRequest,
+  appScope: AppInstance = "user",
+) {
   let supabaseResponse = NextResponse.next({ request });
-  const cookieName = getSupabaseCookieOptions().name;
+  const cookieName = getSupabaseCookieOptions(appScope).name;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return { response: supabaseResponse, user: null };
+  }
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseAnonKey,
     {
       cookies: {
         getAll() {

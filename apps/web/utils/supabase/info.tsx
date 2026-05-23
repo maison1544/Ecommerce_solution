@@ -1,13 +1,10 @@
 ﻿// Supabase configuration - loaded from environment variables
 // Set these in your .env file or deployment platform
 
-const getEnvVar = (key: string, fallback: string = ""): string => {
-  if (typeof process !== "undefined" && process.env) {
-    return process.env[key] || fallback;
-  }
-  return fallback;
-};
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 
-export const projectId = getEnvVar("VITE_SUPABASE_PROJECT_ID", "");
-export const publicAnonKey = getEnvVar("VITE_SUPABASE_ANON_KEY", "");
-export const apiEndpoint = getEnvVar("VITE_API_ENDPOINT", "shop-api");
+export const projectId =
+  process.env.NEXT_PUBLIC_SUPABASE_PROJECT_ID ||
+  supabaseUrl.replace(/^https:\/\//, "").replace(/\.supabase\.co\/?$/, "");
+export const publicAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+export const apiEndpoint = process.env.NEXT_PUBLIC_API_ENDPOINT || "shop-api";

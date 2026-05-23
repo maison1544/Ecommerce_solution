@@ -1,28 +1,12 @@
-import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
-export async function POST(request: Request) {
-  try {
-    const { email, password } = await request.json();
-    const supabase = await createClient();
+export async function POST() {
+  return NextResponse.json(
+    { error: "이메일 또는 비밀번호가 올바르지 않습니다." },
+    { status: 410 },
+  );
+}
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 401 });
-    }
-
-    return NextResponse.json({
-      user: data.user,
-      session: data.session,
-    });
-  } catch {
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
-  }
+export async function GET() {
+  return NextResponse.json({ error: "Not found" }, { status: 404 });
 }

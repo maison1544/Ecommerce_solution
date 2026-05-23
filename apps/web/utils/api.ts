@@ -1,8 +1,11 @@
 import { projectId, apiEndpoint } from "./supabase/info";
 
 // ✅ Centralized API configuration
-// API endpoint name can be configured via VITE_API_ENDPOINT environment variable
-export const API_BASE_URL = `https://${projectId}.supabase.co/functions/v1/${apiEndpoint}`;
+// API endpoint name can be configured via NEXT_PUBLIC_API_ENDPOINT environment variable
+export const isApiConfigured = Boolean(projectId && apiEndpoint);
+export const API_BASE_URL = isApiConfigured
+  ? `https://${projectId}.supabase.co/functions/v1/${apiEndpoint}`
+  : "";
 
 // Helper function to build API URLs
 export const getApiUrl = (path: string) => {

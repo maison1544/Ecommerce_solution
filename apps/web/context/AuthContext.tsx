@@ -1,4 +1,4 @@
-﻿import {
+import {
   createContext,
   useContext,
   useState,
@@ -7,6 +7,7 @@
   useCallback,
 } from "react";
 import { createClient, resetClient } from "@/lib/supabase/client";
+import { useAppScope } from "@/context/AppScopeContext";
 import { API_BASE_URL } from "@/utils/api";
 
 // ✅ User 인터페이스 (보안 강화: app_metadata.role만 사용)
@@ -42,9 +43,12 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const { appScope } = useAppScope();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(true); // 🔥 초기 로딩 상태
+  const loginPath = appScope === "admin" ? "/admin/login" : "/login";
+  const expectedRole = appScope === "admin" ? "admin" : "customer";
 
   // ✅ 세션 타임아웃 설정 (30분 미활동 시 로그아웃)
   const SESSION_TIMEOUT = 30 * 60 * 1000; // 30분
@@ -55,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!isLoggedIn) return;
 
     let lastActivity = Date.now();
-    let timeoutId: NodeJS.Timeout;
+    let timeoutId: ReturnType<typeof setInterval>;
 
     const updateActivity = () => {
       lastActivity = Date.now();
@@ -67,18 +71,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 1. 미활동 시간 초과 체크
       if (now - lastActivity > SESSION_TIMEOUT) {
         console.log("세션 타임아웃: 30분 미활동으로 로그아웃됩니다.");
-        const supabase = createClient();
+        const supabase = createClient(appScope);
         await supabase.auth.signOut();
-        resetClient();
+        resetClient(appScope);
         setCurrentUser(null);
         setIsLoggedIn(false);
-        window.location.href = "/login?reason=timeout";
+        window.location.href = `${loginPath}?reason=timeout`;
         return;
       }
 
       // 2. 🔥 세션 유효성 검사 (비밀번호 변경 등으로 무효화된 경우 감지)
       try {
-        const supabase = createClient();
+        const supabase = createClient(appScope);
 
         // getUser()를 사용해 서버에서 최신 사용자 정보 확인 (캐시가 아닌 실시간 데이터)
         const {
@@ -92,10 +96,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (refreshError) {
             console.log("세션 만료 감지: 자동 로그아웃됩니다.");
             await supabase.auth.signOut();
-            resetClient();
+            resetClient(appScope);
             setCurrentUser(null);
             setIsLoggedIn(false);
-            window.location.href = "/login?reason=session_expired";
+            window.location.href = `${loginPath}?reason=session_expired`;
             return;
           }
         }
@@ -104,10 +108,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (user?.app_metadata?.force_logout) {
           console.log("강제 로그아웃: 비밀번호가 변경되었습니다.");
           await supabase.auth.signOut();
-          resetClient();
+          resetClient(appScope);
           setCurrentUser(null);
           setIsLoggedIn(false);
-          window.location.href = "/login?reason=password_changed";
+          window.location.href = `${loginPath}?reason=password_changed`;
           return;
         }
       } catch (e) {
@@ -137,7 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       clearInterval(timeoutId);
     };
-  }, [isLoggedIn]);
+  }, [appScope, isLoggedIn, loginPath]);
 
   // ✅ 세션 복원 with optimization + force_logout 체크
   useEffect(() => {
@@ -145,7 +149,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const initAuth = async () => {
       try {
-        const supabase = createClient();
+        const supabase = createClient(appScope);
 
         // 🔥 1단계: 먼저 로컬 세션 확인 (캐시)
         const {
@@ -176,6 +180,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // 로컬 세션 데이터로 폴백
           const sessionUser = session.user;
           const role = sessionUser.app_metadata?.role || "customer";
+          if (role !== expectedRole) {
+            await supabase.auth.signOut();
+            resetClient(appScope);
+            setCurrentUser(null);
+            setIsLoggedIn(false);
+            setIsAuthLoading(false);
+            return;
+          }
           const currentUserData: User = {
             id: sessionUser.id,
             name: sessionUser.user_metadata?.name || "",
@@ -195,16 +207,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (user.app_metadata?.force_logout) {
           console.log("강제 로그아웃: 비밀번호가 변경되었습니다.");
           await supabase.auth.signOut();
-          resetClient();
+          resetClient(appScope);
           setCurrentUser(null);
           setIsLoggedIn(false);
           setIsAuthLoading(false);
-          window.location.href = "/login?reason=password_changed";
+          window.location.href = `${loginPath}?reason=password_changed`;
           return;
         }
 
         // 🔥 4단계: 정상 로그인 상태 설정
         const role = user.app_metadata?.role || "customer";
+        if (role !== expectedRole) {
+          await supabase.auth.signOut();
+          resetClient(appScope);
+          setCurrentUser(null);
+          setIsLoggedIn(false);
+          setIsAuthLoading(false);
+          return;
+        }
         const currentUserData: User = {
           id: user.id,
           name: user.user_metadata?.name || "",
@@ -235,14 +255,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [appScope, expectedRole, loginPath]);
 
   // ✅ 로그인 (Supabase Auth 사용) - useCallback으로 최적화
   const login = useCallback(async (email: string, password: string) => {
     const API_BASE = `${API_BASE_URL}`;
+    const genericLoginError = "이메일 또는 비밀번호가 올바르지 않습니다.";
 
     try {
-      // 입력값 검증
       const trimmedEmail = email.trim();
       const trimmedPassword = password.trim();
 
@@ -253,7 +273,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
       }
 
-      // 로그인 시도 확인
       const checkResponse = await fetch(
         `${API_BASE}/api/auth/check-login-attempts`,
         {
@@ -271,75 +290,85 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
       }
 
-      const supabase = createClient();
-      const { data: authData, error: authError } =
-        await supabase.auth.signInWithPassword({
+      const response = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           email: trimmedEmail,
           password: trimmedPassword,
-        });
+          scope: appScope,
+        }),
+      });
 
-      if (authError || !authData.user) {
-        // 로그인 실패 기록
-        await fetch(`${API_BASE}/api/auth/record-login-failure`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: trimmedEmail }),
-        });
-
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.session?.access_token || !result?.session?.refresh_token) {
         return {
           success: false,
-          message: "이메일 또는 비밀번호가 올바르지 않습니다.",
+          message: genericLoginError,
         };
       }
 
-      // ✅ 차단 확인 (app_metadata.blocked)
-      const isBlocked = authData.user.app_metadata?.blocked === true;
-      const bannedUntil = (authData.user as any).banned_until;
+      const supabase = createClient(appScope);
+      const { error: sessionError } = await supabase.auth.setSession({
+        access_token: result.session.access_token,
+        refresh_token: result.session.refresh_token,
+      });
 
-      if ((bannedUntil && new Date(bannedUntil) > new Date()) || isBlocked) {
+      if (sessionError) {
+        resetClient(appScope);
+        return {
+          success: false,
+          message: genericLoginError,
+        };
+      }
+
+      const {
+        data: { user: authUser },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !authUser) {
         await supabase.auth.signOut();
+        resetClient(appScope);
         return {
           success: false,
-          message: "차단된 계정입니다. 고객센터에 문의해주세요.",
+          message: genericLoginError,
         };
       }
 
-      // ✅ app_metadata.role만 사용
-      const role = authData.user.app_metadata?.role || "customer";
+      const role = authUser.app_metadata?.role || "customer";
+      if (role !== expectedRole) {
+        await supabase.auth.signOut();
+        resetClient(appScope);
+        return {
+          success: false,
+          message: genericLoginError,
+        };
+      }
 
       const user: User = {
-        id: authData.user.id,
-        name: authData.user.user_metadata?.name || "",
-        email: authData.user.email || "",
-        phone: authData.user.user_metadata?.phone || null,
-        birthDate: authData.user.user_metadata?.birthDate || null,
-        createdAt: authData.user.created_at || new Date().toISOString(),
+        id: authUser.id,
+        name: authUser.user_metadata?.name || "",
+        email: authUser.email || "",
+        phone: authUser.user_metadata?.phone || null,
+        birthDate: authUser.user_metadata?.birthDate || null,
+        createdAt: authUser.created_at || new Date().toISOString(),
         role: role as "customer" | "admin",
       };
 
       setCurrentUser(user);
       setIsLoggedIn(true);
 
-      // 로그인 성공 시 시도 기록 초기화
-      await fetch(`${API_BASE}/api/auth/reset-login-attempts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-
-      // ✅ 로그인 IP 기록
       try {
         await fetch(`${API_BASE}/api/auth/record-login-ip`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${authData.session?.access_token}`,
+            Authorization: `Bearer ${result.session.access_token}`,
           },
         });
-        console.log("✅ Login IP recorded");
       } catch (ipError) {
         console.error("Failed to record login IP:", ipError);
-        // IP 기록 실패해도 로그인은 성공 처리
       }
 
       return { success: true };
@@ -347,9 +376,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Login error:", error);
       return { success: false, message: "로그인 중 오류가 발생했습니다." };
     }
-  }, []);
-
-  // ✅ 회원가입 (Edge Function 호출)
+  }, [appScope, expectedRole]);
   const register = async (userData: {
     name: string;
     email: string;
@@ -397,20 +424,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // ✅ 로그아웃 - useCallback으로 최적화
   const logout = useCallback(async () => {
     try {
-      const supabase = createClient();
+      const supabase = createClient(appScope);
       await supabase.auth.signOut();
-      resetClient(); // 클라이언트 인스턴스 재설정
+      resetClient(appScope); // 클라이언트 인스턴스 재설정
       setCurrentUser(null);
       setIsLoggedIn(false);
     } catch (error) {
       console.error("Logout error:", error);
     }
-  }, []);
+  }, [appScope]);
 
   // ✅ 액세스 토큰 가져오기 - useCallback으로 최적화 + 세션 갱신 지원 + 자동 로그아웃
   const getAccessToken = useCallback(async (): Promise<string | null> => {
     try {
-      const supabase = createClient();
+      const supabase = createClient(appScope);
 
       // 🔥 먼저 서버에서 최신 사용자 정보로 force_logout 확인
       const {
@@ -426,10 +453,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (isLoggedIn) {
             console.log("세션 만료: 자동 로그아웃됩니다.");
             await supabase.auth.signOut();
-            resetClient();
+            resetClient(appScope);
             setCurrentUser(null);
             setIsLoggedIn(false);
-            window.location.href = "/login?reason=session_expired";
+            window.location.href = `${loginPath}?reason=session_expired`;
           }
           return null;
         }
@@ -440,10 +467,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (user.app_metadata?.force_logout) {
         console.log("강제 로그아웃: 비밀번호가 변경되었습니다.");
         await supabase.auth.signOut();
-        resetClient();
+        resetClient(appScope);
         setCurrentUser(null);
         setIsLoggedIn(false);
-        window.location.href = "/login?reason=password_changed";
+        window.location.href = `${loginPath}?reason=password_changed`;
+        return null;
+      }
+
+      const role = user.app_metadata?.role || "customer";
+      if (role !== expectedRole) {
+        await supabase.auth.signOut();
+        resetClient(appScope);
+        setCurrentUser(null);
+        setIsLoggedIn(false);
+        window.location.href = loginPath;
         return null;
       }
 
@@ -460,10 +497,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (isLoggedIn) {
             console.log("세션 만료: 자동 로그아웃됩니다.");
             await supabase.auth.signOut();
-            resetClient();
+            resetClient(appScope);
             setCurrentUser(null);
             setIsLoggedIn(false);
-            window.location.href = "/login?reason=session_expired";
+            window.location.href = `${loginPath}?reason=session_expired`;
           }
           return null;
         }
@@ -480,10 +517,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (isLoggedIn) {
             console.log("세션 갱신 실패: 자동 로그아웃됩니다.");
             await supabase.auth.signOut();
-            resetClient();
+            resetClient(appScope);
             setCurrentUser(null);
             setIsLoggedIn(false);
-            window.location.href = "/login?reason=session_expired";
+            window.location.href = `${loginPath}?reason=session_expired`;
           }
           return null;
         }
@@ -495,16 +532,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 🔥 에러 발생 시에도 자동 로그아웃
       if (isLoggedIn) {
         console.log("세션 오류: 자동 로그아웃됩니다.");
-        const supabase = createClient();
+        const supabase = createClient(appScope);
         await supabase.auth.signOut();
-        resetClient();
+        resetClient(appScope);
         setCurrentUser(null);
         setIsLoggedIn(false);
-        window.location.href = "/login?reason=session_expired";
+        window.location.href = `${loginPath}?reason=session_expired`;
       }
       return null;
     }
-  }, [isLoggedIn]);
+  }, [appScope, expectedRole, isLoggedIn, loginPath]);
 
   return (
     <AuthContext.Provider

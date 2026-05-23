@@ -1,13 +1,17 @@
-﻿import { useState, useEffect } from "react";
+﻿import { useState, useEffect, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { useAppScope } from "@/context/AppScopeContext";
 import { toast } from "sonner";
 
-export default function LoginPage() {
+export default function LoginPage({ scope }: { scope?: "user" | "admin" }) {
   const router = useRouter();
-  const [searchParams] = useSearchParams();
+  const searchParams = useSearchParams();
+  const { appScope } = useAppScope();
   const { login, isLoggedIn } = useAuth();
+  const isAdminScope = (scope ?? appScope) === "admin";
+  const destination = searchParams.get("redirect") || (isAdminScope ? "/admin" : "/");
 
   // 🔥 세션 만료/비밀번호 변경 등의 이유로 리다이렉트된 경우 메시지 표시
   useEffect(() => {
@@ -25,7 +29,7 @@ export default function LoginPage() {
   useEffect(() => {
     if (isLoggedIn) {
       toast.info("이미 로그인되어 있습니다");
-      router.push("/", { replace: true });
+      router.replace(isAdminScope ? "/admin" : "/");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // 빈 배열 - 마운트 시에만 실행
@@ -66,7 +70,7 @@ export default function LoginPage() {
     setErrors({ ...errors, [field]: error });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
 
     // Validate all fields
@@ -88,7 +92,7 @@ export default function LoginPage() {
 
       if (result.success) {
         toast.success("로그인 성공!");
-        router.push("/");
+        router.push(destination);
       } else {
         toast.error(result.message || "로그인 실패");
       }
@@ -104,10 +108,12 @@ export default function LoginPage() {
       <div className="max-w-md mx-auto">
         <div className="mb-8">
           <h1 className="text-2xl lg:text-4xl text-black font-bold tracking-wider uppercase mb-2">
-            로그인
+            {isAdminScope ? "관리자 로그인" : "로그인"}
           </h1>
           <p className="text-sm lg:text-base text-gray-600">
-            계정에 로그인하여 쇼핑을 시작하세요
+            {isAdminScope
+              ? "관리자 계정으로 로그인하여 관리 페이지로 이동하세요"
+              : "계정에 로그인하여 쇼핑을 시작하세요"}
           </p>
           <div className="h-px bg-black mt-5" />
         </div>
@@ -165,15 +171,17 @@ export default function LoginPage() {
             {isLoading ? "로그인 중..." : "로그인"}
           </button>
 
-          <div className="text-center">
-            <span className="text-sm text-gray-600">계정이 없으신가요? </span>
-            <Link
-              to="/signup"
-              className="text-sm text-[#b78b1f] font-bold hover:underline"
-            >
-              회원가입
-            </Link>
-          </div>
+          {!isAdminScope && (
+            <div className="text-center">
+              <span className="text-sm text-gray-600">계정이 없으신가요? </span>
+              <Link
+                href="/signup"
+                className="text-sm text-[#b78b1f] font-bold hover:underline"
+              >
+                회원가입
+              </Link>
+            </div>
+          )}
         </form>
       </div>
     </main>

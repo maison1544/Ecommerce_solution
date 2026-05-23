@@ -1844,6 +1844,108 @@ app.post("/shop-api/api/inquiries", verifyJWT, verifyCustomer, async (c) => {
 });
 
 // ============================================
+// 카테고리 NAV 표시명 API
+// ============================================
+
+app.get("/shop-api/api/category-nav-labels", async (c) => {
+  try {
+    const { data, error } = await supabase
+      .from("category_nav_labels")
+      .select("slug, category_key, label, description, sort_order, is_visible")
+      .eq("is_visible", true)
+      .order("sort_order", { ascending: true });
+
+    if (error) throw error;
+
+    return c.json({
+      labels: (data || []).map((item: any) => ({
+        slug: item.slug,
+        categoryKey: item.category_key,
+        label: item.label,
+        description: item.description || "",
+        sortOrder: item.sort_order,
+        isVisible: item.is_visible,
+      })),
+    });
+  } catch (error) {
+    console.error("Get category nav labels error:", error);
+    return c.json({ error: "카테고리 NAV 표시명 조회에 실패했습니다" }, 500);
+  }
+});
+
+app.put("/shop-api/api/admin/category-nav-labels", verifyJWT, verifyAdmin, async (c) => {
+  try {
+    const body = await c.req.json();
+    const labels = Array.isArray(body.labels) ? body.labels : [];
+
+    if (labels.length === 0) {
+      return c.json({ error: "저장할 카테고리 표시명이 없습니다" }, 400);
+    }
+
+    const rows = labels
+      .sort((a: any, b: any) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0))
+      .map((item: any, index: number) => {
+      const slug = String(item.slug || "").trim();
+      const categoryKey = String(item.categoryKey || item.category_key || "").trim();
+      const label = String(item.label || "").trim();
+      const description = String(item.description || "").trim();
+      const sortOrder = Number.isFinite(Number(item.sortOrder))
+        ? Number(item.sortOrder)
+        : (index + 1) * 10;
+
+      if (!slug || !categoryKey || !label || label.length > 60 || description.length > 200) {
+        throw new Error("카테고리 slug, 내부 key, 1~60자 표시명, 200자 이하 소개글이 필요합니다");
+      }
+
+      return {
+        slug: String(index + 1),
+        category_key: categoryKey,
+        label,
+        description,
+        sort_order: (index + 1) * 10,
+        is_visible: item.isVisible !== false,
+      };
+    });
+
+    const tempResults = await Promise.all(
+      rows.map((item: any, index: number) =>
+        supabase
+          .from("category_nav_labels")
+          .update({ slug: String(1000 + index + 1) })
+          .eq("category_key", item.category_key)
+      )
+    );
+    const tempError = tempResults.find((result: any) => result.error)?.error;
+    if (tempError) throw tempError;
+
+    const { data, error } = await supabase
+      .from("category_nav_labels")
+      .upsert(rows, { onConflict: "category_key" })
+      .select("slug, category_key, label, description, sort_order, is_visible");
+
+    if (error) throw error;
+
+    return c.json({
+      success: true,
+      labels: (data || []).map((item: any) => ({
+        slug: item.slug,
+        categoryKey: item.category_key,
+        label: item.label,
+        description: item.description || "",
+        sortOrder: item.sort_order,
+        isVisible: item.is_visible,
+      })),
+    });
+  } catch (error: any) {
+    console.error("Update category nav labels error:", error);
+    return c.json(
+      { error: error?.message || "카테고리 NAV 표시명 저장에 실패했습니다" },
+      500
+    );
+  }
+});
+
+// ============================================
 // 상품 API (PostgreSQL)
 // ============================================
 
