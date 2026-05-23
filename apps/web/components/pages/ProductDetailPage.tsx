@@ -11,10 +11,10 @@ import {
 } from "lucide-react";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
-import { API_BASE_URL } from "@/utils/api";
+import { API_BASE_URL, isApiConfigured } from "@/utils/api";
 import { toast } from "sonner";
-import { ImageWithFallback } from "../components/common/ImageWithFallback";
-import { products } from "../data/products";
+import { ImageWithFallback } from "@/components/layout/ImageWithFallback";
+import { products } from "@/data/products";
 
 const img1 =
   "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400";
@@ -81,6 +81,17 @@ export default function ProductDetailPage() {
     const loadProduct = async () => {
       setIsLoadingProduct(true);
       try {
+        if (!isApiConfigured) {
+          const foundProduct = products.find((p: Product) => p.id === Number(id));
+          if (foundProduct) {
+            setProduct(foundProduct);
+          } else {
+            router.push("/");
+          }
+          setIsLoadingProduct(false);
+          return;
+        }
+
         // API에서 상품 로드
         const API_BASE = `${API_BASE_URL}`;
         const response = await fetch(`${API_BASE}/api/products`);
@@ -124,7 +135,7 @@ export default function ProductDetailPage() {
     if (id) {
       loadProduct();
     }
-  }, [id, navigate]);
+  }, [id, router]);
 
   // 상품 ID가 변경되면 selectedImageIndex 초기화
   useEffect(() => {
@@ -243,13 +254,15 @@ export default function ProductDetailPage() {
     }
 
     // 바로 구매 페이지로 이동
-    router.push("/checkout", {
-      state: {
+    sessionStorage.setItem(
+      "checkoutState",
+      JSON.stringify({
         type: "direct",
         productId: product.id,
         quantity,
-      },
-    });
+      })
+    );
+    router.push("/checkout");
   };
 
   const totalPrice = product.price * quantity;
@@ -548,7 +561,7 @@ export default function ProductDetailPage() {
             className="relative rounded-lg shadow-lg bg-gradient-to-b from-white to-[#e8e7e7] aspect-square mb-4 overflow-hidden cursor-pointer"
             onClick={() => setSelectedImageIndex(0)}
           >
-            {product.hasDiscount && product.originalPrice > product.price && (
+            {product.hasDiscount && product.originalPrice !== undefined && product.originalPrice > product.price && (
               <div className="absolute top-4 left-4 bg-red-500 text-white rounded px-3 py-2 flex items-center gap-1 shadow-lg z-10">
                 <span className="font-bold">
                   {Math.round(

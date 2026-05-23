@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { API_BASE_URL } from "@/utils/api";
-import { formatPhoneNumber } from "../utils/phoneFormat";
+import { formatPhoneNumber } from "@/utils/phoneFormat";
 
 export default function SignupPage() {
   const router = useRouter();
@@ -15,9 +15,9 @@ export default function SignupPage() {
   useEffect(() => {
     if (isLoggedIn) {
       toast.info("이미 로그인되어 있습니다");
-      router.push("/", { replace: true });
+      router.replace("/");
     }
-  }, [isLoggedIn, navigate]);
+  }, [isLoggedIn, router]);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -367,7 +367,7 @@ export default function SignupPage() {
               이미 계정이 있으신가요?{" "}
             </span>
             <Link
-              to="/login"
+              href="/login"
               className="text-sm text-[#b78b1f] font-bold hover:underline"
             >
               로그인

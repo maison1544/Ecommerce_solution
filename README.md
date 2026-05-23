@@ -22,11 +22,11 @@
 
 ### 기술 스택
 
-- **Frontend**: React 18, TypeScript, Vite
+- **Frontend**: Next.js, React, TypeScript
 - **Backend**: Supabase (PostgreSQL, Edge Functions)
 - **Styling**: TailwindCSS, Radix UI
 - **State Management**: React Context API
-- **Routing**: React Router v6
+- **Routing**: Next.js App Router
 - **Deployment**: Vercel
 
 ## 🚀 빠른 시작
@@ -34,7 +34,7 @@
 ### 1. 의존성 설치
 
 ```bash
-npm install
+pnpm install
 ```
 
 ### 2. 환경 변수 설정
@@ -42,15 +42,18 @@ npm install
 `.env` 파일이 이미 설정되어 있습니다:
 
 ```env
-VITE_SUPABASE_URL=https://gpyuopwpxfwhbnkcltev.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_PROJECT_ID=your-project-id
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+NEXT_PUBLIC_API_ENDPOINT=shop-api
+NEXT_PUBLIC_APP_INSTANCE=user
 ```
 
 ### 3. Supabase 설정
 
 #### A. SQL 스키마 실행
 
-1. [Supabase Dashboard](https://supabase.com/dashboard/project/gpyuopwpxfwhbnkcltev/sql) 접속
+1. Supabase Dashboard의 SQL Editor 접속
 2. `supabase-schema.sql` 파일 내용 복사
 3. SQL Editor에 붙여넣고 실행
 
@@ -64,10 +67,10 @@ npm install -g supabase
 supabase login
 
 # 프로젝트 연결
-supabase link --project-ref gpyuopwpxfwhbnkcltev
+supabase link --project-ref YOUR_PROJECT_REF
 
 # Edge Function 배포
-supabase functions deploy make-server-94a0507e --project-ref gpyuopwpxfwhbnkcltev
+supabase functions deploy shop-api --project-ref YOUR_PROJECT_REF
 ```
 
 자세한 내용은 `EDGE_FUNCTION_DEPLOY.md` 참조
@@ -75,16 +78,15 @@ supabase functions deploy make-server-94a0507e --project-ref gpyuopwpxfwhbnkclte
 ### 4. 개발 서버 실행
 
 ```bash
-npm run dev
+pnpm --filter web dev
 ```
 
-브라우저에서 http://localhost:5173 접속
+브라우저에서 http://localhost:3000 접속
 
 ### 5. 프로덕션 빌드
 
 ```bash
-npm run build
-npm run preview
+pnpm --filter web build
 ```
 
 ## 📚 문서
@@ -99,21 +101,17 @@ npm run preview
 
 ```
 Applyresponsivedesign/
-├── src/
-│   ├── components/          # 재사용 가능한 UI 컴포넌트
-│   ├── context/             # React Context (Auth, Cart)
-│   ├── data/                # 로컬 데이터 (products.ts)
-│   ├── pages/               # 페이지 컴포넌트
-│   ├── supabase/
-│   │   └── functions/
-│   │       └── server/      # Edge Function 코드
-│   └── utils/
-│       └── supabase/        # Supabase 클라이언트
+├── apps/
+│   └── web/
+│       ├── app/             # Next.js App Router
+│       ├── components/      # 재사용 가능한 UI 컴포넌트
+│       ├── context/         # React Context (Auth, Cart, AppScope)
+│       ├── lib/             # Supabase scoped clients
+│       └── utils/           # API/Supabase helpers
 ├── .env                     # 환경 변수
 ├── package.json             # 의존성 관리
 ├── supabase-schema.sql      # 데이터베이스 스키마
-├── vercel.json              # Vercel 배포 설정
-└── vite.config.ts           # Vite 설정
+└── vercel.json              # Vercel 배포 설정
 ```
 
 ## 🔐 보안
@@ -157,8 +155,10 @@ vercel --prod
 
 **환경 변수 설정 (Vercel):**
 
-- `VITE_SUPABASE_URL`
-- `VITE_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_PROJECT_ID`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_API_ENDPOINT`
 
 자세한 내용은 `DEPLOYMENT_GUIDE.md` 참조
 
@@ -205,15 +205,15 @@ npm install --save-dev @types/react @types/react-dom typescript
 
 ```bash
 rm -rf node_modules
-npm install
-npm run build
+pnpm install
+pnpm --filter web build
 ```
 
 ## 📞 지원
 
 문제 발생 시:
 
-1. [Supabase Dashboard Logs](https://supabase.com/dashboard/project/gpyuopwpxfwhbnkcltev/logs) 확인
+1. Supabase Dashboard Logs 확인
 2. 브라우저 개발자 도구 콘솔 확인
 3. `SYSTEM_VALIDATION.md` 참조
 

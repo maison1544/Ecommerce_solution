@@ -3,19 +3,7 @@ import { MessageSquare, Lock } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { API_BASE_URL } from "@/utils/api";
-
-// 날짜 포맷팅 함수: 2025. 12. 6. 18:06:33
-const formatDateTime = (dateStr: string | null | undefined): string => {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
-  const hours = String(d.getHours()).padStart(2, "0");
-  const mins = String(d.getMinutes()).padStart(2, "0");
-  const secs = String(d.getSeconds()).padStart(2, "0");
-  return `${year}. ${month}. ${day}. ${hours}:${mins}:${secs}`;
-};
+import { formatKoreanDateTime } from "@/utils/date";
 
 interface Inquiry {
   id: string;
@@ -310,7 +298,7 @@ export default function CustomerServicePage() {
                 </div>
                 <h3 className="font-bold mb-2">{selectedInquiry.title}</h3>
                 <p className="text-sm text-gray-600 mb-2">
-                  {formatDateTime(selectedInquiry.createdAt)}
+                  {formatKoreanDateTime(selectedInquiry.createdAt)}
                 </p>
                 <p className="text-sm whitespace-pre-wrap">
                   {selectedInquiry.content}
@@ -321,7 +309,7 @@ export default function CustomerServicePage() {
                 <div className="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-500">
                   <h4 className="font-bold mb-2 text-blue-900">답변</h4>
                   <p className="text-sm text-gray-600 mb-2">
-                    {formatDateTime(selectedInquiry.answer.answeredAt)}
+                    {formatKoreanDateTime(selectedInquiry.answer.answeredAt)}
                   </p>
                   <p className="text-sm whitespace-pre-wrap">
                     {selectedInquiry.answer.content}
@@ -375,7 +363,7 @@ export default function CustomerServicePage() {
                     </div>
                     <h3 className="font-bold mb-2">{inquiry.title}</h3>
                     <p className="text-sm text-gray-600">
-                      {formatDateTime(inquiry.createdAt)}
+                      {formatKoreanDateTime(inquiry.createdAt)}
                     </p>
                   </div>
                 ))}

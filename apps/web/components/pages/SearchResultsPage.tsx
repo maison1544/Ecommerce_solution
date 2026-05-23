@@ -1,13 +1,13 @@
 ﻿import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Product, products as localProducts } from "../data/products";
-import { ProductCard } from "../components/ProductCard";
-import { useDebounce } from "../utils/performance";
-import { API_BASE_URL } from "@/utils/api";
+import { Product, products as localProducts } from "@/data/products";
+import { ProductCard } from "@/components/ProductCard";
+import { useDebounce } from "@/utils/performance";
+import { API_BASE_URL, isApiConfigured } from "@/utils/api";
 
 export default function SearchResultsPage() {
-  const [searchParams] = useSearchParams();
+  const searchParams = useSearchParams();
   const searchQuery = searchParams.get("q") || "";
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -24,6 +24,16 @@ export default function SearchResultsPage() {
         return;
       }
 
+      const localResults = localProducts.filter((p) =>
+        p.name.toLowerCase().includes(debouncedSearch.toLowerCase())
+      );
+
+      if (!isApiConfigured) {
+        setProducts(localResults);
+        setIsLoading(false);
+        return;
+      }
+
       setIsLoading(true);
       try {
         const API_BASE = `${API_BASE_URL}`;
@@ -35,10 +45,6 @@ export default function SearchResultsPage() {
         if (response.ok) {
           const data = await response.json();
           const apiProducts = data.products || [];
-          // 로컬 상품에서도 검색
-          const localResults = localProducts.filter((p) =>
-            p.name.toLowerCase().includes(debouncedSearch.toLowerCase())
-          );
           const allProductsList = [...localResults, ...apiProducts];
           const uniqueProducts = allProductsList.filter(
             (product, index, self) =>
@@ -48,10 +54,6 @@ export default function SearchResultsPage() {
         }
       } catch (error) {
         console.error("Failed to load products:", error);
-        // 에러 시 로컬 상품에서만 검색
-        const localResults = localProducts.filter((p) =>
-          p.name.toLowerCase().includes(debouncedSearch.toLowerCase())
-        );
         setProducts(localResults);
       }
       setIsLoading(false);

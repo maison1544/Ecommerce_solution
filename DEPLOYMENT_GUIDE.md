@@ -43,9 +43,9 @@ git push -u origin main
 
 ### 1.3 .gitignore로 제외되는 것들
 
-- `node_modules/` - npm 패키지 (복제 후 `npm install`로 재설치)
+- `node_modules/` - npm 패키지 (복제 후 `pnpm install`로 재설치)
 - `.env` - 환경 변수 (복제 후 직접 생성)
-- `dist/` - 빌드 결과물 (복제 후 `npm run build`로 재생성)
+- `.next/` - Next.js 빌드 결과물 (복제 후 `pnpm --filter web build`로 재생성)
 
 ---
 
@@ -65,7 +65,7 @@ git clone https://github.com/YOUR_USERNAME/solution-studio-ecommerce.git my-shop
 cd my-shop
 
 # 의존성 설치
-npm install
+pnpm install
 ```
 
 ### 2.2 Supabase 프로젝트 생성
@@ -108,25 +108,27 @@ supabase functions deploy shop-api --project-ref YOUR_PROJECT_ID
 Supabase Dashboard → **Settings** → **API**에서:
 
 - **Project URL**: `https://xxxxx.supabase.co`
-- **anon public key**: `eyJhbGci...`
+- **anon public key**: Supabase Dashboard의 anon public key 값
 
 ### 2.3 환경 변수 설정
 
 프로젝트 루트에 `.env` 파일 생성:
 
 ```env
-VITE_SUPABASE_PROJECT_ID=YOUR_PROJECT_ID
-VITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY
-VITE_API_ENDPOINT=shop-api
+NEXT_PUBLIC_SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
+NEXT_PUBLIC_SUPABASE_PROJECT_ID=YOUR_PROJECT_ID
+NEXT_PUBLIC_SUPABASE_ANON_KEY=YOUR_ANON_KEY
+NEXT_PUBLIC_API_ENDPOINT=shop-api
+NEXT_PUBLIC_APP_INSTANCE=user
 ```
 
 ### 2.4 로컬 테스트
 
 ```bash
 # 개발 서버 실행
-npm run dev
+pnpm --filter web dev
 
-# 브라우저에서 http://localhost:5173 접속
+# 브라우저에서 http://localhost:3000 접속
 ```
 
 ### 2.5 Vercel 배포
@@ -136,17 +138,19 @@ npm run dev
 1. https://vercel.com 로그인
 2. **Add New** → **Project**
 3. **Import Git Repository** → GitHub 저장소 선택
-4. Framework Preset: **Vite** 자동 감지
+4. Framework Preset: **Next.js** 선택
 
 #### B. 환경 변수 설정
 
 Vercel Dashboard → **Settings** → **Environment Variables**:
 
-| Name                       | Value             |
-| -------------------------- | ----------------- |
-| `VITE_SUPABASE_PROJECT_ID` | `your_project_id` |
-| `VITE_SUPABASE_ANON_KEY`   | `your_anon_key`   |
-| `VITE_API_ENDPOINT`        | `shop-api`        |
+| Name                              | Value                                |
+| --------------------------------- | ------------------------------------ |
+| `NEXT_PUBLIC_SUPABASE_URL`        | `https://your_project_id.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_PROJECT_ID` | `your_project_id`                    |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY`   | `your_anon_key`                      |
+| `NEXT_PUBLIC_API_ENDPOINT`        | `shop-api`                           |
+| `NEXT_PUBLIC_APP_INSTANCE`        | `user`                               |
 
 #### C. 배포
 
@@ -210,7 +214,7 @@ npm install
 ### Q: Supabase Edge Function 404 에러
 
 - Edge Function 이름이 `shop-api`인지 확인
-- `VITE_API_ENDPOINT` 환경 변수가 `shop-api`인지 확인
+- `NEXT_PUBLIC_API_ENDPOINT` 환경 변수가 `shop-api`인지 확인
 
 ### Q: Vercel 빌드 실패
 
@@ -256,16 +260,15 @@ my-shop/
 │   ├── favicon.svg
 │   ├── og-image.svg
 │   └── robots.txt
-├── src/
-│   ├── components/
-│   ├── context/
-│   ├── data/             # 로컬 테스트 데이터
-│   ├── pages/
-│   └── utils/
-├── index.html
+├── apps/
+│   └── web/
+│       ├── app/
+│       ├── components/
+│       ├── context/
+│       ├── lib/
+│       └── utils/
 ├── package.json
-├── vercel.json
-└── vite.config.ts
+└── vercel.json
 ```
 
 ---
@@ -278,7 +281,7 @@ my-shop/
 - [ ] Supabase 프로젝트 생성 완료
 - [ ] SQL 스키마 적용 완료
 - [ ] Edge Function 배포 완료
-- [ ] `npm run build` 성공
+- [ ] `pnpm --filter web build` 성공
 - [ ] Vercel 환경 변수 설정 완료
 - [ ] Cloudflare DNS 설정 완료
 

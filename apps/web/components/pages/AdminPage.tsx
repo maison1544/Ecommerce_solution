@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+﻿import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -19,15 +19,21 @@ import {
   Key,
   MapPin,
   Star,
+  LogOut,
+  Tags,
 } from "lucide-react";
-import { useDebounce } from "../utils/performance";
+import { useDebounce } from "@/utils/performance";
 import { useAuth } from "@/context/AuthContext";
-import { products, Product } from "../data/products";
-import { orders, Order } from "../data/orders";
-import { categoryMap, categoryList } from "../data/categories";
-import { InquiriesTab } from "../components/InquiriesTab";
-import { Pagination, TableSkeleton } from "../components/Pagination";
+import { products, Product } from "@/data/products";
+import { Order } from "@/data/orders";
+import { categoryMap } from "@/data/categories";
+import { InquiriesTab } from "@/components/InquiriesTab";
+import { AdminNotificationBell } from "@/components/admin/AdminNotificationBell";
+import { CategoryNavManagementTab } from "@/components/admin/CategoryNavManagementTab";
+import { Pagination } from "@/components/Pagination";
 import { API_BASE_URL } from "@/utils/api";
+import { formatKoreanDateTime } from "@/utils/date";
+import { useCategoryNavLabels } from "@/hooks/useCategoryNavLabels";
 
 // ✅ API Base URL with correct slug
 const API_BASE = `${API_BASE_URL}`;
@@ -38,18 +44,142 @@ type TabType =
   | "users"
   | "admins"
   | "orders"
-  | "inquiries";
+  | "inquiries"
+  | "categoryNav";
 
-// 새 주문 알림을 위한 전역 상태
-let newOrdersCount = 0;
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const SUPPORTED_PRODUCT_IMAGE_UPLOAD_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+]);
+const MAX_PRODUCT_IMAGES = 4;
+
+type ProductImageSlotStatus = "existing" | "pending" | "uploading" | "uploaded" | "failed";
+
+type ProductImageSlot = {
+  id: string;
+  url?: string;
+  file?: File;
+  previewUrl: string;
+  status: ProductImageSlotStatus;
+  error?: string;
+};
+
+const PRODUCT_IMAGE_STATUS_LABELS: Record<ProductImageSlotStatus, string> = {
+  existing: "기존",
+  pending: "업로드 대기",
+  uploading: "업로드 중",
+  uploaded: "업로드 완료",
+  failed: "실패",
+};
+
+function createProductImageSlotId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function createExistingImageSlots(images: string[] = []): ProductImageSlot[] {
+  return images.slice(0, MAX_PRODUCT_IMAGES).map((url, index) => ({
+    id: `existing-${index}-${url}`,
+    url,
+    previewUrl: url,
+    status: "existing",
+  }));
+}
+
+function getKstDateParts(date: Date) {
+  const kstDate = new Date(date.getTime() + KST_OFFSET_MS);
+  return {
+    year: kstDate.getUTCFullYear(),
+    month: kstDate.getUTCMonth(),
+    date: kstDate.getUTCDate(),
+  };
+}
+
+function createUtcDateFromKst(
+  year: number,
+  month: number,
+  date: number,
+  hour = 0,
+  minute = 0,
+  second = 0,
+  millisecond = 0
+) {
+  return new Date(
+    Date.UTC(year, month, date, hour, minute, second, millisecond) -
+      KST_OFFSET_MS
+  );
+}
+
+function parseDateInputAsKst(value: string, endOfDay = false) {
+  const [year, month, date] = value.split("-").map(Number);
+  if (!year || !month || !date) return null;
+
+  return createUtcDateFromKst(
+    year,
+    month - 1,
+    date,
+    endOfDay ? 23 : 0,
+    endOfDay ? 59 : 0,
+    endOfDay ? 59 : 0,
+    endOfDay ? 999 : 0
+  );
+}
+
+function getDashboardDateRange(
+  period: string,
+  customStart: string,
+  customEnd: string
+) {
+  const now = new Date();
+  const today = getKstDateParts(now);
+  let startDate = createUtcDateFromKst(today.year, today.month, today.date);
+  let endDate = createUtcDateFromKst(
+    today.year,
+    today.month,
+    today.date,
+    23,
+    59,
+    59,
+    999
+  );
+
+  if (period === "7d") {
+    startDate = createUtcDateFromKst(today.year, today.month, today.date - 6);
+  } else if (period === "30d") {
+    startDate = createUtcDateFromKst(today.year, today.month, today.date - 29);
+  } else if (period === "month") {
+    startDate = createUtcDateFromKst(today.year, today.month, 1);
+  } else if (period === "custom") {
+    startDate = parseDateInputAsKst(customStart, false) || startDate;
+    endDate = parseDateInputAsKst(customEnd || customStart, true) || endDate;
+  }
+
+  return {
+    startDate,
+    endDate,
+    label: `${formatKoreanDateTime(startDate, true)} ~ ${formatKoreanDateTime(endDate, true)}`,
+  };
+}
 
 export default function AdminPage() {
   const router = useRouter();
-  const [searchParams] = useSearchParams();
+  const searchParams = useSearchParams();
   const { currentUser, isLoggedIn, logout, getAccessToken, isAuthLoading } =
     useAuth();
   const [activeTab, setActiveTab] = useState<TabType>("dashboard");
   const [newOrders, setNewOrders] = useState(0);
+  const adminDisplayName =
+    currentUser?.email || currentUser?.name || currentUser?.id || "관리자";
+
+  const handleTabChange = useCallback(
+    (tab: TabType) => {
+      setActiveTab(tab);
+      router.replace(`/admin?tab=${tab}`);
+    },
+    [router]
+  );
 
   // URL query parameter로 탭 설정
   useEffect(() => {
@@ -63,6 +193,7 @@ export default function AdminPage() {
         "admins",
         "orders",
         "inquiries",
+        "categoryNav",
       ].includes(tab)
     ) {
       setActiveTab(tab);
@@ -78,7 +209,7 @@ export default function AdminPage() {
 
     // currentUser가 로드될 때까지 기다림
     if (!isLoggedIn) {
-      router.push("/login");
+      router.push("/admin/login");
       return;
     }
 
@@ -94,15 +225,13 @@ export default function AdminPage() {
       return;
     }
 
-    // 최근 30분 내 새 주문 체크
-    const recentOrders = orders.filter((order) => {
-      const orderDate = new Date(order.date);
-      const now = new Date();
-      const diff = now.getTime() - orderDate.getTime();
-      return diff < 30 * 60 * 1000; // 30분
-    });
-    setNewOrders(recentOrders.length);
-  }, [isLoggedIn, currentUser, navigate, isAuthLoading]);
+  }, [isLoggedIn, currentUser, router, isAuthLoading]);
+
+  const handleLogout = async () => {
+    await logout();
+    toast.success("로그아웃되었습니다");
+    router.push("/admin/login");
+  };
 
   // 🔥 로딩 중이면 로딩 표시
   if (isAuthLoading) {
@@ -130,6 +259,22 @@ export default function AdminPage() {
               상품, 유저, 주문을 관리하세요
             </p>
           </div>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+            <div
+              className="text-xs sm:text-sm font-bold text-gray-700 break-all sm:text-right"
+              title={adminDisplayName}
+            >
+              관리자: {adminDisplayName}
+            </div>
+            <AdminNotificationBell onOrderNotification={() => setNewOrders((prev) => prev + 1)} />
+            <button
+              onClick={handleLogout}
+              className="flex items-center justify-center gap-2 px-4 py-2 border border-black rounded-lg font-bold hover:bg-black hover:text-white transition-colors"
+            >
+              <LogOut size={18} />
+              로그아웃
+            </button>
+          </div>
         </div>
         <div className="h-px bg-black mt-5" />
       </div>
@@ -138,7 +283,7 @@ export default function AdminPage() {
       <div className="border-b mb-8">
         <div className="flex gap-8 overflow-x-auto">
           <button
-            onClick={() => setActiveTab("dashboard")}
+            onClick={() => handleTabChange("dashboard")}
             className={`pb-4 font-bold transition-colors flex items-center gap-2 whitespace-nowrap ${
               activeTab === "dashboard"
                 ? "text-black border-b-2 border-black"
@@ -149,7 +294,7 @@ export default function AdminPage() {
             대시보드
           </button>
           <button
-            onClick={() => setActiveTab("products")}
+            onClick={() => handleTabChange("products")}
             className={`pb-4 font-bold transition-colors flex items-center gap-2 whitespace-nowrap ${
               activeTab === "products"
                 ? "text-black border-b-2 border-black"
@@ -160,7 +305,7 @@ export default function AdminPage() {
             상품 관리
           </button>
           <button
-            onClick={() => setActiveTab("users")}
+            onClick={() => handleTabChange("users")}
             className={`pb-4 font-bold transition-colors flex items-center gap-2 whitespace-nowrap ${
               activeTab === "users"
                 ? "text-black border-b-2 border-black"
@@ -171,7 +316,7 @@ export default function AdminPage() {
             유저 관리
           </button>
           <button
-            onClick={() => setActiveTab("admins")}
+            onClick={() => handleTabChange("admins")}
             className={`pb-4 font-bold transition-colors flex items-center gap-2 whitespace-nowrap ${
               activeTab === "admins"
                 ? "text-black border-b-2 border-black"
@@ -182,7 +327,10 @@ export default function AdminPage() {
             관리자 관리
           </button>
           <button
-            onClick={() => setActiveTab("orders")}
+            onClick={() => {
+              setNewOrders(0);
+              handleTabChange("orders");
+            }}
             className={`pb-4 font-bold transition-colors flex items-center gap-2 whitespace-nowrap relative ${
               activeTab === "orders"
                 ? "text-black border-b-2 border-black"
@@ -198,7 +346,7 @@ export default function AdminPage() {
             )}
           </button>
           <button
-            onClick={() => setActiveTab("inquiries")}
+            onClick={() => handleTabChange("inquiries")}
             className={`pb-4 font-bold transition-colors flex items-center gap-2 whitespace-nowrap ${
               activeTab === "inquiries"
                 ? "text-black border-b-2 border-black"
@@ -207,6 +355,17 @@ export default function AdminPage() {
           >
             <MessageCircle size={18} />
             문의 관리
+          </button>
+          <button
+            onClick={() => handleTabChange("categoryNav")}
+            className={`pb-4 font-bold transition-colors flex items-center gap-2 whitespace-nowrap ${
+              activeTab === "categoryNav"
+                ? "text-black border-b-2 border-black"
+                : "text-gray-400 hover:text-gray-600"
+            }`}
+          >
+            <Tags size={18} />
+            카테고리 NAV 관리
           </button>
         </div>
       </div>
@@ -218,6 +377,7 @@ export default function AdminPage() {
       {activeTab === "admins" && <AdminsTab />}
       {activeTab === "orders" && <OrdersTab />}
       {activeTab === "inquiries" && <InquiriesTab />}
+      {activeTab === "categoryNav" && <CategoryNavManagementTab />}
     </main>
   );
 }
@@ -225,79 +385,176 @@ export default function AdminPage() {
 // 대시보드 탭
 function DashboardTab() {
   const { getAccessToken, currentUser } = useAuth();
+  const [period, setPeriod] = useState("today");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
+  const [loadingStats, setLoadingStats] = useState(false);
   const [stats, setStats] = useState({
     totalProducts: 0,
     totalUsers: 0,
     totalOrders: 0,
     totalRevenue: 0,
+    periodOrderCount: 0,
+    periodRevenue: 0,
+    periodNewOrders: 0,
+    periodNewInquiries: 0,
+    periodNewUsers: 0,
+    orderStatusCounts: {} as Record<string, number>,
+    shippingStatusCounts: {} as Record<string, number>,
+    popularProducts: [] as Array<{ name: string; quantity: number; revenue: number }>,
+    recentOrders: [] as Array<{
+      id: string;
+      status: string;
+      totalAmount: number;
+      createdAt: string;
+    }>,
+    periodLabel: "",
   });
 
   useEffect(() => {
     const loadStats = async () => {
       try {
+        setLoadingStats(true);
         const token = await getAccessToken();
+        if (!token) return;
 
-        // Fetch products from API
-        const productsRes = await fetch(`${API_BASE}/api/products`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const headers = { Authorization: `Bearer ${token}` };
+        const [productsRes, usersRes, ordersRes, inquiriesRes] = await Promise.all([
+          fetch(`${API_BASE}/api/products`),
+          fetch(`${API_BASE}/api/admin/users?page=1&perPage=1000`, { headers }),
+          fetch(`${API_BASE}/api/admin/orders?page=1&perPage=1000`, { headers }),
+          fetch(`${API_BASE}/api/admin/inquiries?page=1&perPage=1000`, { headers }),
+        ]);
 
-        // Fetch users from API
-        const usersRes = await fetch(`${API_BASE}/api/admin/users`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        // Fetch orders from API
-        const ordersRes = await fetch(`${API_BASE}/api/admin/orders`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (productsRes.ok && usersRes.ok && ordersRes.ok) {
-          const productsData = await productsRes.json();
-          const usersData = await usersRes.json();
-          const ordersData = await ordersRes.json();
-
-          const totalProducts = productsData.products?.length || 0;
-          const totalUsers = usersData.users?.length || 0;
-          const totalOrders = ordersData.orders?.length || 0;
-          const totalRevenue =
-            ordersData.orders
-              ?.filter((order: any) => order.status !== "취소")
-              .reduce(
-                (sum: number, order: any) => sum + (order.totalAmount ?? 0),
-                0
-              ) || 0;
-
-          setStats({
-            totalProducts,
-            totalUsers,
-            totalOrders,
-            totalRevenue,
-          });
+        if (!productsRes.ok || !usersRes.ok || !ordersRes.ok || !inquiriesRes.ok) {
+          throw new Error("대시보드 통계 데이터를 불러오지 못했습니다");
         }
+
+        const [productsData, usersData, ordersData, inquiriesData] =
+          await Promise.all([
+            productsRes.json(),
+            usersRes.json(),
+            ordersRes.json(),
+            inquiriesRes.json(),
+          ]);
+        const { startDate, endDate, label } = getDashboardDateRange(
+          period,
+          customStart,
+          customEnd
+        );
+        const ordersList = ordersData.orders || [];
+        const usersList = usersData.users || [];
+        const inquiriesList = inquiriesData.inquiries || [];
+        const getCreatedAt = (item: { rawCreatedAt?: string; createdAt?: string; date?: string }) =>
+          new Date(item.rawCreatedAt || item.createdAt || item.date || "").getTime();
+        const isInRange = (timestamp: number) =>
+          Number.isFinite(timestamp) &&
+          timestamp >= startDate.getTime() &&
+          timestamp <= endDate.getTime();
+        const periodOrders = ordersList.filter((order: {
+          rawCreatedAt?: string;
+          date?: string;
+        }) => isInRange(getCreatedAt(order)));
+        const periodInquiries = inquiriesList.filter((inquiry: { createdAt?: string }) =>
+          isInRange(getCreatedAt(inquiry))
+        );
+        const periodUsers = usersList.filter((user: { rawCreatedAt?: string; createdAt?: string }) =>
+          isInRange(getCreatedAt(user))
+        );
+        const totalRevenue = ordersList
+          .filter((order: { status?: string }) => order.status !== "취소")
+          .reduce(
+            (sum: number, order: { totalAmount?: number }) =>
+              sum + Number(order.totalAmount || 0),
+            0
+          );
+        const periodRevenue = periodOrders
+          .filter((order: { status?: string }) => order.status !== "취소")
+          .reduce(
+            (sum: number, order: { totalAmount?: number }) =>
+              sum + Number(order.totalAmount || 0),
+            0
+          );
+        const orderStatusCounts = periodOrders.reduce(
+          (acc: Record<string, number>, order: { status?: string }) => {
+            const status = order.status || "상태 없음";
+            acc[status] = (acc[status] || 0) + 1;
+            return acc;
+          },
+          {}
+        );
+        const productMap = new Map<
+          string,
+          { name: string; quantity: number; revenue: number }
+        >();
+
+        periodOrders
+          .filter((order: { status?: string }) => order.status !== "취소")
+          .forEach((order: { items?: Array<{ name?: string; quantity?: number; price?: number }> }) => {
+            (order.items || []).forEach((item) => {
+              const name = item.name || "상품 정보 없음";
+              const quantity = Number(item.quantity || 0);
+              const current = productMap.get(name) || {
+                name,
+                quantity: 0,
+                revenue: 0,
+              };
+              current.quantity += quantity;
+              current.revenue += Number(item.price || 0) * quantity;
+              productMap.set(name, current);
+            });
+          });
+
+        setStats((prev) => ({
+          ...prev,
+          totalProducts:
+            productsData.pagination?.total ??
+            productsData.products?.length ??
+            products.length,
+          totalUsers: usersData.pagination?.total ?? usersList.length,
+          totalOrders: ordersData.pagination?.total ?? ordersList.length,
+          totalRevenue,
+          periodOrderCount: periodOrders.length,
+          periodRevenue,
+          periodNewOrders: periodOrders.length,
+          periodNewInquiries: periodInquiries.length,
+          periodNewUsers: periodUsers.length,
+          orderStatusCounts,
+          shippingStatusCounts: orderStatusCounts,
+          popularProducts: Array.from(productMap.values())
+            .sort((a, b) => b.quantity - a.quantity)
+            .slice(0, 5),
+          recentOrders: periodOrders.slice(0, 5).map(
+            (order: {
+              id: string;
+              status?: string;
+              totalAmount?: number;
+              rawCreatedAt?: string;
+              date?: string;
+            }) => ({
+              id: order.id,
+              status: order.status || "배송 준비 중",
+              totalAmount: Number(order.totalAmount || 0),
+              createdAt: order.rawCreatedAt || order.date || "",
+            })
+          ),
+          periodLabel: label,
+        }));
       } catch (error) {
         console.error("Error loading stats:", error);
-        // Use local data as fallback
-        setStats({
+        setStats((prev) => ({
+          ...prev,
           totalProducts: products.length,
-          totalUsers: 0,
-          totalOrders: 0,
-          totalRevenue: 0,
-        });
+        }));
+      } finally {
+        setLoadingStats(false);
       }
     };
 
-    // Only load stats if user is admin
     if (currentUser && currentUser.role === "admin") {
       loadStats();
     }
-  }, [currentUser]);
+  }, [currentUser, getAccessToken, period, customStart, customEnd]);
 
   const statsArray = [
     {
@@ -324,10 +581,83 @@ function DashboardTab() {
       icon: TrendingUp,
       color: "bg-orange-500",
     },
+    {
+      label: "기간 내 주문",
+      value: stats.periodOrderCount,
+      icon: ShoppingCart,
+      color: "bg-indigo-500",
+    },
+    {
+      label: "기간 내 매출",
+      value: `${stats.periodRevenue.toLocaleString()}원`,
+      icon: TrendingUp,
+      color: "bg-amber-500",
+    },
+    {
+      label: "신규 문의",
+      value: stats.periodNewInquiries,
+      icon: MessageCircle,
+      color: "bg-pink-500",
+    },
+    {
+      label: "신규 회원",
+      value: stats.periodNewUsers,
+      icon: Users,
+      color: "bg-teal-500",
+    },
+  ];
+  const periodOptions = [
+    { value: "today", label: "오늘" },
+    { value: "7d", label: "최근 7일" },
+    { value: "30d", label: "최근 30일" },
+    { value: "month", label: "이번 달" },
+    { value: "custom", label: "직접 선택" },
   ];
 
   return (
-    <div>
+    <div className="space-y-8">
+      <div className="bg-white border rounded-lg p-4">
+        <div className="flex flex-col lg:flex-row lg:items-end gap-4">
+          <div className="flex-1">
+            <h2 className="text-lg font-bold mb-2">기간별 운영 통계</h2>
+            <p className="text-sm text-gray-600">
+              {stats.periodLabel || "선택한 기간의 주문, 매출, 문의, 회원 지표를 확인하세요"}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {periodOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setPeriod(option.value)}
+                className={`px-4 py-2 rounded-lg font-bold text-sm ${
+                  period === option.value
+                    ? "bg-black text-white"
+                    : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {period === "custom" && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+            <input
+              type="date"
+              value={customStart}
+              onChange={(event) => setCustomStart(event.target.value)}
+              className="border rounded-lg px-3 py-2 text-sm outline-none focus:border-black"
+            />
+            <input
+              type="date"
+              value={customEnd}
+              onChange={(event) => setCustomEnd(event.target.value)}
+              className="border rounded-lg px-3 py-2 text-sm outline-none focus:border-black"
+            />
+          </div>
+        )}
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         {statsArray.map((stat, index) => (
           <div key={index} className="bg-white border rounded-lg p-6">
@@ -343,6 +673,67 @@ function DashboardTab() {
           </div>
         ))}
       </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white border rounded-lg p-6">
+          <h3 className="font-bold mb-4">주문 상태별 현황</h3>
+          <div className="space-y-3">
+            {Object.entries(stats.orderStatusCounts).length === 0 ? (
+              <p className="text-sm text-gray-500">기간 내 주문이 없습니다</p>
+            ) : (
+              Object.entries(stats.orderStatusCounts).map(([status, count]) => (
+                <div key={status} className="flex items-center justify-between text-sm">
+                  <span className="font-bold">{status}</span>
+                  <span>{count.toLocaleString()}건</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        <div className="bg-white border rounded-lg p-6">
+          <h3 className="font-bold mb-4">인기 상품</h3>
+          <div className="space-y-3">
+            {stats.popularProducts.length === 0 ? (
+              <p className="text-sm text-gray-500">기간 내 주문 상품이 없습니다</p>
+            ) : (
+              stats.popularProducts.map((product) => (
+                <div
+                  key={product.name}
+                  className="flex items-start justify-between gap-4 text-sm"
+                >
+                  <span className="font-bold break-words">{product.name}</span>
+                  <span className="text-right whitespace-nowrap">
+                    {product.quantity.toLocaleString()}개 / {product.revenue.toLocaleString()}원
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="bg-white border rounded-lg p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold">최근 주문</h3>
+          {loadingStats && <span className="text-xs text-gray-500">갱신 중...</span>}
+        </div>
+        <div className="space-y-3">
+          {stats.recentOrders.length === 0 ? (
+            <p className="text-sm text-gray-500">최근 주문이 없습니다</p>
+          ) : (
+            stats.recentOrders.map((order) => (
+              <div
+                key={order.id}
+                className="grid grid-cols-1 md:grid-cols-[1fr_auto_auto] gap-2 text-sm border-b pb-3 last:border-b-0 last:pb-0"
+              >
+                <span className="font-mono text-xs break-all">{order.id}</span>
+                <span className="font-bold">{order.status}</span>
+                <span className="text-right">
+                  {order.totalAmount.toLocaleString()}원 · {formatKoreanDateTime(order.createdAt)}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -350,6 +741,7 @@ function DashboardTab() {
 // 상품 관리 탭
 function ProductsTab() {
   const { getAccessToken, currentUser } = useAuth();
+  const { labels: categoryLabels, getCategoryLabel } = useCategoryNavLabels({ includeHidden: true });
   const [productList, setProductList] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -372,9 +764,48 @@ function ProductsTab() {
     specs: [],
   });
 
-  const [imageFiles, setImageFiles] = useState<File[]>([]);
-  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  const [imageSlots, setImageSlots] = useState<ProductImageSlot[]>([]);
   const [isUploadingImages, setIsUploadingImages] = useState(false); // 이미지 업로드 중 상태
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const imageSlotsRef = useRef<ProductImageSlot[]>([]);
+
+  const categoryOptions = useMemo(
+    () =>
+      categoryLabels.map((item) => ({
+        value: item.categoryKey,
+        label: item.label,
+      })),
+    [categoryLabels]
+  );
+
+  const getProductCategoryLabel = useCallback(
+    (categoryKey: string) => getCategoryLabel(categoryKey) || categoryMap[categoryKey] || categoryKey,
+    [getCategoryLabel]
+  );
+
+  const revokeObjectUrl = (url: string) => {
+    if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+  };
+
+  const resetImageSelection = (clearFormImages = true) => {
+    imageSlotsRef.current.forEach((slot) => revokeObjectUrl(slot.previewUrl));
+    setImageSlots([]);
+    if (clearFormImages) {
+      setFormData((prev) => ({ ...prev, images: [] }));
+    }
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  };
+
+  useEffect(() => {
+    imageSlotsRef.current = imageSlots;
+  }, [imageSlots]);
+
+  useEffect(
+    () => () => {
+      imageSlotsRef.current.forEach((slot) => revokeObjectUrl(slot.previewUrl));
+    },
+    []
+  );
 
   const [errors, setErrors] = useState({
     name: "",
@@ -465,6 +896,7 @@ function ProductsTab() {
   };
 
   const handleAddNew = () => {
+    resetImageSelection(false);
     setIsAdding(true);
     setEditingId(null);
     setFormData({
@@ -482,20 +914,135 @@ function ProductsTab() {
   };
 
   const handleEdit = (product: Product) => {
+    resetImageSelection(false);
     setEditingId(product.id);
     setIsAdding(false);
     setFormData(product);
     setErrors({ name: "", price: "", category: "" });
+    setImageSlots(createExistingImageSlots(product.images || []));
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  };
+
+  const uploadPendingImageSlots = async (token: string) => {
+    const currentSlots = imageSlotsRef.current;
+    const pendingSlots = currentSlots.filter((slot) => slot.status === "pending" && slot.file);
+
+    if (pendingSlots.length === 0) {
+      const urls = currentSlots
+        .map((slot) => slot.url)
+        .filter((url): url is string => Boolean(url));
+      setFormData((prev) => ({ ...prev, images: urls }));
+      return urls;
+    }
+
+    setIsUploadingImages(true);
+    setImageSlots((prev) =>
+      prev.map((slot) =>
+        pendingSlots.some((pendingSlot) => pendingSlot.id === slot.id)
+          ? { ...slot, status: "uploading", error: undefined }
+          : slot
+      )
+    );
+
+    try {
+      const uploadResults = await Promise.allSettled(
+        pendingSlots.map(async (slot) => {
+          if (!slot.file) throw new Error("업로드할 파일이 없습니다");
+
+          const uploadFormData = new FormData();
+          uploadFormData.append("file", slot.file);
+
+          const response = await fetch(`${API_BASE}/api/upload-image`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            body: uploadFormData,
+          });
+
+          if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || "이미지 업로드에 실패했습니다");
+          }
+
+          const data = await response.json();
+          if (typeof data.url !== "string" || !data.url.trim()) {
+            throw new Error("이미지 URL을 받지 못했습니다");
+          }
+
+          return { id: slot.id, url: data.url };
+        })
+      );
+
+      const resultById = new Map<string, PromiseSettledResult<{ id: string; url: string }>>();
+      uploadResults.forEach((result, index) => {
+        resultById.set(pendingSlots[index].id, result);
+      });
+
+      let failedCount = 0;
+      const nextSlots = currentSlots.map((slot) => {
+        const result = resultById.get(slot.id);
+        if (!result) return slot;
+
+        if (result.status === "fulfilled") {
+          revokeObjectUrl(slot.previewUrl);
+          return {
+            id: slot.id,
+            url: result.value.url,
+            previewUrl: result.value.url,
+            status: "uploaded" as const,
+          };
+        }
+
+        failedCount += 1;
+        return {
+          ...slot,
+          status: "failed" as const,
+          error: result.reason instanceof Error ? result.reason.message : "이미지 업로드에 실패했습니다",
+        };
+      });
+
+      setImageSlots(nextSlots);
+      const urls = nextSlots
+        .filter((slot) => slot.status !== "failed")
+        .map((slot) => slot.url)
+        .filter((url): url is string => Boolean(url));
+      setFormData((prev) => ({ ...prev, images: urls }));
+
+      if (failedCount > 0) {
+        toast.error(`${failedCount}개 이미지 업로드에 실패했습니다. 실패 이미지를 삭제하거나 교체 후 다시 저장해주세요.`);
+        return null;
+      }
+
+      toast.success(`${pendingSlots.length}개 이미지가 업로드되었습니다!`);
+      return urls;
+    } finally {
+      setIsUploadingImages(false);
+    }
+  };
+
+  const removeImageSlot = (slotId: string) => {
+    const removedSlot = imageSlotsRef.current.find((slot) => slot.id === slotId);
+    if (removedSlot) revokeObjectUrl(removedSlot.previewUrl);
+
+    const nextSlots = imageSlotsRef.current.filter((slot) => slot.id !== slotId);
+    setImageSlots(nextSlots);
+    setFormData((prev) => ({
+      ...prev,
+      images: nextSlots
+        .map((slot) => slot.url)
+        .filter((url): url is string => Boolean(url)),
+    }));
+
+    if (imageInputRef.current) imageInputRef.current.value = "";
   };
 
   const handleSave = async () => {
-    // 중복 클릭 방지
     if (isSaving) {
       toast.info("저장 중입니다. 잠시만 기다려주세요...");
       return;
     }
 
-    // 이미지 업로드 중인지 확인
     if (isUploadingImages) {
       toast.warning(
         "이미지 업로드가 진행 중입니다. 완료될 때까지 기다려주세요..."
@@ -516,39 +1063,10 @@ function ProductsTab() {
       return;
     }
 
-    // 이미지 URL은 이미 formData.images에 저장되어 있음 (handleImageChange에서 업로드 완료)
-    const imageUrls = formData.images || [];
-
-    // 이미지가 선택되었지만 업로드가 안 된 경우 경고
-    if (imagePreviews.length > 0 && imageUrls.length === 0) {
-      toast.warning("이미지 업로드가 완료될 때까지 기다려주세요...");
+    if (imageSlots.some((slot) => slot.status === "failed")) {
+      toast.warning("실패한 이미지를 삭제하거나 다시 선택해주세요.");
       return;
     }
-
-    // 주요 사양 정리: trim 후 빈 문자열 제거
-    const cleanedSpecs = (formData.specs || [])
-      .map((spec) => spec.trim())
-      .filter((spec) => spec !== "");
-
-    const productData = {
-      name: formData.name!.trim(),
-      price: formData.price!,
-      originalPrice: formData.originalPrice || formData.price!,
-      category: formData.category!,
-      hasDiscount: formData.hasDiscount || false,
-      discount: formData.discount || 0,
-      images: imageUrls,
-      description: formData.description || "",
-      specs: cleanedSpecs,
-      // 수정 시에는 기존 rating 유지, 신규 생성 시에는 null (백엔드에서 설정)
-      ...(editingId && {
-        rating: formData.rating,
-        reviewCount: formData.reviewCount,
-      }),
-    };
-
-    console.log("저장할 상품 데이터:", productData);
-    console.log("이미지 URLs:", imageUrls);
 
     setIsSaving(true);
 
@@ -560,10 +1078,30 @@ function ProductsTab() {
         return;
       }
 
-      console.log("사용 중인 토큰:", token.substring(0, 50) + "...");
+      const imageUrls = await uploadPendingImageSlots(token);
+      if (!imageUrls) return;
+
+      const cleanedSpecs = (formData.specs || [])
+        .map((spec) => spec.trim())
+        .filter((spec) => spec !== "");
+
+      const productData = {
+        name: formData.name!.trim(),
+        price: formData.price!,
+        originalPrice: formData.originalPrice || formData.price!,
+        category: formData.category!,
+        hasDiscount: formData.hasDiscount || false,
+        discount: formData.discount || 0,
+        images: imageUrls,
+        description: formData.description || "",
+        specs: cleanedSpecs,
+        ...(editingId && {
+          rating: formData.rating,
+          reviewCount: formData.reviewCount,
+        }),
+      };
 
       if (isAdding) {
-        // 새 상품 추가 - API 호출
         const response = await fetch(`${API_BASE}/api/products`, {
           method: "POST",
           headers: {
@@ -582,11 +1120,9 @@ function ProductsTab() {
         const data = await response.json();
         console.log("상품 추가:", data.product);
 
-        // 상품 목록 다시 로드
         await loadProducts();
         toast.success("상품이 추가되었습니다!");
       } else if (editingId) {
-        // 상품 수정 - API 호출
         const response = await fetch(`${API_BASE}/api/products/${editingId}`, {
           method: "PUT",
           headers: {
@@ -604,23 +1140,17 @@ function ProductsTab() {
         const data = await response.json();
         console.log("상품 수정:", data.product);
 
-        // 상품 목록 다시 로드
         await loadProducts();
         toast.success("상품이 수정되었습니다!");
       }
 
       setIsAdding(false);
       setEditingId(null);
-      setImageFiles([]);
-      setImagePreviews([]);
-
-      // 중복 클릭 방지를 위한 지연 (2초)
-      setTimeout(() => {
-        setIsSaving(false);
-      }, 2000);
+      resetImageSelection();
     } catch (error) {
       console.error("Product save error:", error);
-      toast.error(`상품 저장 실패: ${error.message}`);
+      toast.error(`상품 저장 실패: ${error instanceof Error ? error.message : "알 수 없는 오류"}`);
+    } finally {
       setIsSaving(false);
     }
   };
@@ -649,87 +1179,60 @@ function ProductsTab() {
       toast.success("상품이 삭제되었습니다!");
     } catch (error) {
       console.error("Product delete error:", error);
-      toast.error(`상품 삭제 실패: ${error.message}`);
+      toast.error(`상품 삭제 실패: ${error instanceof Error ? error.message : "알 수 없는 오류"}`);
     }
   };
 
   const handleCancel = () => {
     setIsAdding(false);
     setEditingId(null);
-    setImageFiles([]);
-    setImagePreviews([]);
+    resetImageSelection();
   };
 
-  const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const fileArray = Array.from(files).slice(0, 4); // 최대 4개
-
-    if (fileArray.length > 4) {
-      toast.error("이미지는 최대 4개까지 업로드할 수 있습니다");
-      return;
-    }
-
-    // 관리자 권한 확인 - 먼저 확인
     if (!currentUser || currentUser.role !== "admin") {
       toast.error("관리자 권한이 필요합니다");
+      if (imageInputRef.current) imageInputRef.current.value = "";
       return;
     }
 
-    // 미리보기 생성
-    const previewArray = fileArray.map((file) => URL.createObjectURL(file));
-    setImagePreviews(previewArray);
-
-    // 서버에 업로드
-    setIsUploadingImages(true);
-    toast.info("이미지 업로드 중...");
-
-    const uploadPromises = fileArray.map(async (file) => {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      try {
-        const token = await getAccessToken();
-        const response = await fetch(`${API_BASE}/api/upload-image`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          body: formData,
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.error || "Upload failed");
-        }
-
-        const data = await response.json();
-        return data.url;
-      } catch (error) {
-        console.error("Image upload error:", error);
-        toast.error(`이미지 업로드 실패: ${error.message}`);
-        return null;
-      }
-    });
-
-    const uploadedUrls = await Promise.all(uploadPromises);
-    const validUrls = uploadedUrls.filter((url) => url !== null);
-
-    if (validUrls.length > 0) {
-      // 업로드 완료 후 0.5초 대기 (안정성 확보)
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      // 업로드된 URL을 formData에 저장 (함수형 업데이트로 최신 상태 보장)
-      setFormData((prev) => ({ ...prev, images: validUrls }));
-      toast.success(`${validUrls.length}개 이미지가 업로드되었습니다!`);
-      console.log("이미지 업로드 완료:", validUrls);
-    } else {
-      toast.error("이미지 업로드에 실패했습니다");
-      setImagePreviews([]);
+    const remainingSlots = MAX_PRODUCT_IMAGES - imageSlotsRef.current.length;
+    if (remainingSlots <= 0) {
+      toast.error("이미지는 최대 4개까지 등록할 수 있습니다");
+      if (imageInputRef.current) imageInputRef.current.value = "";
+      return;
     }
 
-    setIsUploadingImages(false);
+    const selectedFiles = Array.from(files);
+    const uploadableFiles = selectedFiles
+      .filter((file) => SUPPORTED_PRODUCT_IMAGE_UPLOAD_TYPES.has(file.type))
+      .slice(0, remainingSlots);
+
+    if (uploadableFiles.length !== selectedFiles.length) {
+      toast.info("JPG, PNG, WebP, GIF 파일만 업로드할 수 있습니다.");
+    }
+
+    if (selectedFiles.length > remainingSlots) {
+      toast.info(`남은 ${remainingSlots}개 이미지만 추가합니다.`);
+    }
+
+    if (uploadableFiles.length === 0) {
+      if (imageInputRef.current) imageInputRef.current.value = "";
+      return;
+    }
+
+    const newSlots = uploadableFiles.map((file) => ({
+      id: createProductImageSlotId(),
+      file,
+      previewUrl: URL.createObjectURL(file),
+      status: "pending" as const,
+    }));
+
+    setImageSlots((prev) => [...prev, ...newSlots].slice(0, MAX_PRODUCT_IMAGES));
+    if (imageInputRef.current) imageInputRef.current.value = "";
   };
 
   const filteredProducts = productList.filter((p) => {
@@ -784,7 +1287,7 @@ function ProductsTab() {
           >
             전체
           </button>
-          {categoryList.map((cat) => (
+          {categoryOptions.map((cat) => (
             <button
               key={cat.value}
               onClick={() => setSelectedCategory(cat.value)}
@@ -869,7 +1372,7 @@ function ProductsTab() {
                   errors.category ? "border-red-500" : "border-[#eeeeee]"
                 }`}
               >
-                {categoryList.map((cat) => (
+                {categoryOptions.map((cat) => (
                   <option key={cat.value} value={cat.value}>
                     {cat.label}
                   </option>
@@ -892,7 +1395,7 @@ function ProductsTab() {
                   className="w-full bg-gray-100 rounded border border-gray-300 px-4 py-3 text-sm outline-none cursor-not-allowed"
                   placeholder="0"
                 />
-                {formData.hasDiscount && formData.discount > 0 && (
+                {formData.hasDiscount && (formData.discount ?? 0) > 0 && (
                   <div className="absolute right-3 top-1/2 -translate-y-1/2 bg-red-500 text-white px-2 py-1 rounded text-xs font-bold">
                     {formData.discount}% 할인
                   </div>
@@ -907,80 +1410,72 @@ function ProductsTab() {
               <label className="block text-sm font-bold mb-2">
                 상품 이미지 (최대 4개)
               </label>
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                max={4}
-                onChange={handleImageChange}
-                className="hidden"
-                id="image-upload"
-              />
-              <label
-                htmlFor="image-upload"
-                className="flex items-center justify-center gap-2 bg-gray-200 text-black rounded px-4 py-3 font-bold hover:bg-gray-300 cursor-pointer"
-              >
-                <Upload size={18} />
-                이미지 선택 (최대 4개)
-              </label>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div className="flex items-center gap-2 text-sm font-bold text-gray-700">
+                  <Upload size={18} />
+                  {isUploadingImages ? "이미지 업로드 중..." : `이미지 ${imageSlots.length}/${MAX_PRODUCT_IMAGES}`}
+                </div>
+                <input
+                  ref={imageInputRef}
+                  id="admin-product-image-upload"
+                  name="admin-product-image-upload"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,image/gif"
+                  multiple
+                  onChange={handleImageChange}
+                  className="block w-full cursor-pointer rounded border border-gray-300 bg-white text-sm text-gray-700 file:mr-4 file:cursor-pointer file:border-0 file:bg-gray-200 file:px-4 file:py-3 file:font-bold file:text-black hover:file:bg-gray-300 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isUploadingImages || imageSlots.length >= MAX_PRODUCT_IMAGES}
+                />
+              </div>
+              {imageSlots.some((slot) => slot.file) && (
+                <div className="mt-2 text-xs text-gray-700 break-words">
+                  선택한 파일: {imageSlots.map((slot) => slot.file?.name).filter(Boolean).join(", ")}
+                </div>
+              )}
               <p className="text-xs text-gray-600 mt-1">
-                첫 번째 이미지가 메인 이미지로 사용됩니다
+                첫 번째 이미지가 메인 이미지로 사용됩니다. 이미지는 개별 추가/삭제할 수 있으며 저장 시 새 이미지만 업로드됩니다.
               </p>
 
-              {/* Image Previews */}
-              {imagePreviews.length > 0 && (
-                <div className="grid grid-cols-4 gap-3 mt-4">
-                  {imagePreviews.slice(0, 4).map((preview, index) => (
-                    <div key={index} className="relative">
+              {imageSlots.length > 0 && (
+                <div className="grid grid-cols-2 gap-3 mt-4 sm:grid-cols-4">
+                  {imageSlots.map((slot, index) => (
+                    <div key={slot.id} className="relative">
                       <img
-                        src={preview}
+                        src={slot.previewUrl}
                         alt={`Preview ${index + 1}`}
                         className="w-full h-24 object-cover rounded border-2 border-gray-300"
                       />
                       <div className="absolute top-1 left-1 bg-black text-white text-xs px-2 py-1 rounded">
                         {index === 0 ? "메인" : index + 1}
                       </div>
+                      <div
+                        className={`absolute bottom-1 left-1 rounded px-2 py-1 text-[10px] font-bold ${
+                          slot.status === "failed"
+                            ? "bg-red-600 text-white"
+                            : slot.status === "uploading"
+                            ? "bg-blue-600 text-white"
+                            : "bg-white/90 text-gray-700"
+                        }`}
+                      >
+                        {PRODUCT_IMAGE_STATUS_LABELS[slot.status]}
+                      </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          const newFiles = imageFiles.filter(
-                            (_, i) => i !== index
-                          );
-                          const newPreviews = imagePreviews.filter(
-                            (_, i) => i !== index
-                          );
-                          setImageFiles(newFiles);
-                          setImagePreviews(newPreviews);
-                        }}
+                        onClick={() => removeImageSlot(slot.id)}
+                        disabled={slot.status === "uploading"}
                         className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
                       >
                         <X size={12} />
                       </button>
+                      {slot.error && (
+                        <p className="mt-1 break-words text-[11px] text-red-600">
+                          {slot.error}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
-
-              {/* Existing Images for Edit Mode */}
-              {editingId &&
-                formData.images &&
-                formData.images.length > 0 &&
-                imagePreviews.length === 0 && (
-                  <div className="grid grid-cols-4 gap-3 mt-4">
-                    {formData.images.map((img, index) => (
-                      <div key={index} className="relative">
-                        <img
-                          src={img}
-                          alt={`Product ${index + 1}`}
-                          className="w-full h-24 object-cover rounded border-2 border-gray-300"
-                        />
-                        <div className="absolute top-1 left-1 bg-black text-white text-xs px-2 py-1 rounded">
-                          {index === 0 ? "메인" : index + 1}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
             </div>
 
             <div className="md:col-span-2">
@@ -1066,7 +1561,7 @@ function ProductsTab() {
                   <tr key={product.id} className="border-b hover:bg-gray-50">
                     <td className="px-6 py-4 text-sm">{product.name}</td>
                     <td className="px-6 py-4 text-sm">
-                      {categoryMap[product.category] || product.category}
+                      {getProductCategoryLabel(product.category)}
                     </td>
                     <td className="px-6 py-4 text-sm text-right font-bold">
                       {(product.price ?? 0).toLocaleString()}원
@@ -1419,16 +1914,7 @@ function UsersTab({ logout }: { logout: () => void }) {
                           </span>
                           {user.blockedAt && (
                             <span className="text-xs text-gray-500 mt-1">
-                              {new Date(user.blockedAt).toLocaleString(
-                                "ko-KR",
-                                {
-                                  year: "numeric",
-                                  month: "2-digit",
-                                  day: "2-digit",
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                }
-                              )}
+                              {formatKoreanDateTime(user.blockedAt)}
                             </span>
                           )}
                         </div>
@@ -1616,18 +2102,7 @@ function UsersTab({ logout }: { logout: () => void }) {
                       </div>
                       <div className="mt-2 text-xs text-gray-400">
                         등록일:{" "}
-                        {(() => {
-                          const d = new Date(addr.created_at);
-                          return `${d.getFullYear()}. ${
-                            d.getMonth() + 1
-                          }. ${d.getDate()}. ${String(d.getHours()).padStart(
-                            2,
-                            "0"
-                          )}:${String(d.getMinutes()).padStart(
-                            2,
-                            "0"
-                          )}:${String(d.getSeconds()).padStart(2, "0")}`;
-                        })()}
+                        {formatKoreanDateTime(addr.created_at, true)}
                       </div>
                     </div>
                   ))}
@@ -1839,7 +2314,7 @@ function AdminsTab() {
       loadAdmins(); // Reload admin list
     } catch (error) {
       console.error("Admin creation error:", error);
-      toast.error(`관리자 생성 실패: ${error.message}`);
+      toast.error(`관리자 생성 실패: ${error instanceof Error ? error.message : "알 수 없는 오류"}`);
     } finally {
       setIsCreating(false);
     }
@@ -2028,13 +2503,7 @@ function AdminsTab() {
                         </span>
                         {user.blockedAt && (
                           <span className="text-xs text-gray-500 mt-1">
-                            {new Date(user.blockedAt).toLocaleString("ko-KR", {
-                              year: "numeric",
-                              month: "2-digit",
-                              day: "2-digit",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
+                            {formatKoreanDateTime(user.blockedAt)}
                           </span>
                         )}
                       </div>
@@ -2361,28 +2830,28 @@ function OrdersTab() {
       {/* Orders Table */}
       <div className="bg-white border rounded-lg overflow-hidden mb-4">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1000px]">
+          <table className="w-full min-w-[1200px] table-auto">
             <thead className="bg-gray-50 border-b">
               <tr>
-                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[120px]">
+                <th className="text-left px-4 py-3 text-xs font-bold whitespace-normal min-w-[220px]">
                   주문번호
                 </th>
-                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[150px]">
+                <th className="text-left px-4 py-3 text-xs font-bold whitespace-normal min-w-[150px]">
                   주문일시
                 </th>
-                <th className="text-right px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[100px]">
+                <th className="text-right px-4 py-3 text-xs font-bold whitespace-normal min-w-[100px]">
                   주문금액
                 </th>
-                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[80px]">
+                <th className="text-left px-4 py-3 text-xs font-bold whitespace-normal min-w-[90px]">
                   수령인
                 </th>
-                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[120px]">
+                <th className="text-left px-4 py-3 text-xs font-bold whitespace-normal min-w-[120px]">
                   연락처
                 </th>
-                <th className="text-left px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[200px]">
+                <th className="text-left px-4 py-3 text-xs font-bold whitespace-normal min-w-[320px]">
                   배송지
                 </th>
-                <th className="text-center px-4 py-3 text-sm font-bold whitespace-nowrap min-w-[130px]">
+                <th className="text-center px-4 py-3 text-xs font-bold whitespace-normal min-w-[130px]">
                   배송상태
                 </th>
               </tr>
@@ -2390,26 +2859,26 @@ function OrdersTab() {
             <tbody>
               {paginatedOrders.map((order) => (
                 <tr key={order.id} className="border-b hover:bg-gray-50">
-                  <td className="px-4 py-4 text-sm font-bold whitespace-nowrap">
-                    <span className="font-mono text-xs">
-                      {order.id?.substring(0, 8) || "-"}...
+                  <td className="px-4 py-5 text-xs font-bold align-top whitespace-normal break-all">
+                    <span className="font-mono">
+                      {order.id || "-"}
                     </span>
                   </td>
-                  <td className="px-4 py-4 text-sm whitespace-nowrap">
-                    {order.date || "날짜 없음"}
+                  <td className="px-4 py-5 text-xs align-top whitespace-normal">
+                    {formatKoreanDateTime(order.rawCreatedAt || order.date) || order.date || "날짜 없음"}
                   </td>
-                  <td className="px-4 py-4 text-sm text-right font-bold whitespace-nowrap">
+                  <td className="px-4 py-5 text-xs text-right font-bold align-top whitespace-normal">
                     {(order.totalAmount ?? 0).toLocaleString()}원
                   </td>
-                  <td className="px-4 py-4 text-sm font-bold whitespace-nowrap">
+                  <td className="px-4 py-5 text-xs font-bold align-top whitespace-normal break-words">
                     {order.shippingAddress?.recipient || "수령인 없음"}
                   </td>
-                  <td className="px-4 py-4 text-sm whitespace-nowrap">
+                  <td className="px-4 py-5 text-xs align-top whitespace-normal break-words">
                     {order.shippingAddress?.phone || "-"}
                   </td>
-                  <td className="px-4 py-4 text-sm">
+                  <td className="px-4 py-5 text-xs align-top whitespace-normal break-words">
                     <div
-                      className="max-w-[200px] truncate"
+                      className="whitespace-normal break-words leading-relaxed"
                       title={`${order.shippingAddress?.address || ""} ${
                         order.shippingAddress?.detailAddress || ""
                       }`}
@@ -2418,7 +2887,7 @@ function OrdersTab() {
                       {order.shippingAddress?.detailAddress || ""}
                     </div>
                   </td>
-                  <td className="px-4 py-4 text-center">
+                  <td className="px-4 py-5 text-center align-top">
                     <select
                       value={order.status}
                       onChange={(e) =>

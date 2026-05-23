@@ -6,14 +6,15 @@ import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { API_BASE_URL } from "@/utils/api";
-import { ImageWithFallback } from "../components/common/ImageWithFallback";
+import { ImageWithFallback } from "@/components/layout/ImageWithFallback";
+import { useCategoryNavLabels } from "@/hooks/useCategoryNavLabels";
 import {
   getCartItems,
   subscribeToCartChanges,
   flushPendingUpdates,
   syncCartWithServer,
   type CartItem as StoreCartItem,
-} from "../data/cart";
+} from "@/data/cart";
 
 interface CartItem {
   id: number;
@@ -46,6 +47,8 @@ export default function CartPage() {
   const router = useRouter();
   const { refreshCart, removeFromCart, clearCart, isClearingCart } = useCart();
   const { isLoggedIn, isAuthLoading, getAccessToken } = useAuth();
+  const { resolveCategory } = useCategoryNavLabels();
+  const specialDealsSlug = resolveCategory("special-deals")?.slug || "13";
 
   // 🔥 1. 전역 스토어에서 초기값 가져오기 (즉시 데이터 표시)
   const [localCartItems, setLocalCartItems] = useState<CartItem[]>(() => {
@@ -141,7 +144,7 @@ export default function CartPage() {
 
     // 서버에서 최신 데이터 로드 (백그라운드)
     loadCartItemsFromServer();
-  }, [isLoggedIn, isAuthLoading, navigate, loadCartItemsFromServer]);
+  }, [isLoggedIn, isAuthLoading, router, loadCartItemsFromServer]);
 
   // 🔥 수량 업데이트 - 낙관적 업데이트 적용
   const updateQuantity = useCallback(
@@ -312,7 +315,7 @@ export default function CartPage() {
         <div className="text-center py-20">
           <p className="text-gray-500 mb-4">장바구니가 비어있습니다</p>
           <Link
-            to="/category/special-deals"
+            href={`/category/${specialDealsSlug}`}
             className="inline-block bg-black text-white rounded-[10px] px-8 py-3 font-bold tracking-wider uppercase hover:bg-gray-800"
           >
             쇼핑 계속하기
@@ -439,16 +442,20 @@ export default function CartPage() {
               </div>
 
               <button
-                onClick={() =>
-                  router.push("/checkout", { state: { type: "cart" } })
-                }
+                onClick={() => {
+                  sessionStorage.setItem(
+                    "checkoutState",
+                    JSON.stringify({ type: "cart" })
+                  );
+                  router.push("/checkout");
+                }}
                 className="w-full flex items-center justify-center bg-black text-white rounded-[10px] shadow-[0px_4px_4px_0px_rgba(0,0,0,0.25)] py-4 font-bold tracking-wider uppercase hover:bg-gray-800 mb-3"
               >
                 구매하기
               </button>
 
               <Link
-                to="/category/special-deals"
+                href={`/category/${specialDealsSlug}`}
                 className="block text-center text-sm text-[#b78b1f] hover:underline"
               >
                 쇼핑 계속하기

@@ -8,32 +8,39 @@ import {
   Sparkles,
   Package,
 } from "lucide-react";
-import { products, getProductsByCategory, Product } from "../data/products";
-import { categoryMap } from "../data/categories";
+import { products, getProductsByCategory, Product } from "@/data/products";
+import { categoryMap } from "@/data/categories";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { useCart } from "@/context/CartContext";
-import { ProductCard } from "../components/ProductCard";
-import { API_BASE_URL } from "@/utils/api";
+import { ProductCard } from "@/components/ProductCard";
+import { API_BASE_URL, isApiConfigured } from "@/utils/api";
 
 export default function HomePage() {
   const router = useRouter();
   const { currentUser, getAccessToken } = useAuth();
   const { addToCart } = useCart();
-  const [allProducts, setAllProducts] = useState<Product[]>(products);
+  const [allProducts, setAllProducts] = useState<Product[]>(
+    products.filter((product) => product.category === "special-deals")
+  );
 
   // Load products from API
   useEffect(() => {
     const loadProducts = async () => {
+      if (!isApiConfigured) return;
+
       try {
         const API_BASE = `${API_BASE_URL}`;
-        const response = await fetch(`${API_BASE}/api/products`);
+        const params = new URLSearchParams({ category: "special-deals" });
+        const response = await fetch(`${API_BASE}/api/products?${params}`);
 
         if (response.ok) {
           const data = await response.json();
           const apiProducts = data.products || [];
-          // 로컬 상품과 API 상품 합치기
-          const allProductsList = [...products, ...apiProducts];
+          const allProductsList = [
+            ...products.filter((product) => product.category === "special-deals"),
+            ...apiProducts,
+          ];
           // 중복 제거
           const uniqueProducts = allProductsList.filter(
             (product, index, self) =>
@@ -51,7 +58,7 @@ export default function HomePage() {
 
   // 특가 상품만 가져오기 - useMemo로 최적화
   const specialDealsProducts = useMemo(() => {
-    return allProducts.filter((p) => p.category === "special-deals");
+    return allProducts;
   }, [allProducts]);
 
   return (

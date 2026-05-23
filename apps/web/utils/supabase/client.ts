@@ -1,8 +1,8 @@
-import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import { projectId, publicAnonKey } from "./info";
-
-// Supabase 클라이언트 싱글톤 인스턴스
-let supabaseInstance: ReturnType<typeof createSupabaseClient> | null = null;
+import {
+  createClient as createScopedClient,
+  resetClient as resetScopedClient,
+  supabase,
+} from "@/lib/supabase/client";
 
 /**
  * Supabase 클라이언트 생성 함수
@@ -11,34 +11,7 @@ let supabaseInstance: ReturnType<typeof createSupabaseClient> | null = null;
  * - 성능 최적화를 위한 설정 적용
  */
 export function createClient() {
-  if (!supabaseInstance) {
-    const supabaseUrl = `https://${projectId}.supabase.co`;
-
-    supabaseInstance = createSupabaseClient(supabaseUrl, publicAnonKey, {
-      auth: {
-        autoRefreshToken: true, // 자동 토큰 갱신 활성화
-        persistSession: true, // 세션을 localStorage에 저장
-        detectSessionInUrl: true, // URL에서 세션 감지 (OAuth 콜백용)
-        storage:
-          typeof window !== "undefined" ? window.localStorage : undefined,
-        storageKey: "ecommerce-auth-token",
-      },
-      global: {
-        headers: {
-          "X-Client-Info": "ecommerce-app",
-        },
-      },
-      db: {
-        schema: "public",
-      },
-      realtime: {
-        params: {
-          eventsPerSecond: 10, // 실시간 이벤트 제한
-        },
-      },
-    });
-  }
-  return supabaseInstance;
+  return createScopedClient();
 }
 
 /**
@@ -46,11 +19,11 @@ export function createClient() {
  * - 로그아웃 시 또는 새로운 세션이 필요할 때 사용
  */
 export function resetClient() {
-  supabaseInstance = null;
+  resetScopedClient();
 }
 
 // Supabase 클라이언트 인스턴스 (싱글톤)
-export const supabase = createClient();
+export { supabase };
 
 // 데이터베이스 타입 정의
 export interface Database {

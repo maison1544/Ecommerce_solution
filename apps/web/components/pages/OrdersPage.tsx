@@ -5,7 +5,8 @@ import { Package, Truck, CheckCircle, XCircle } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { API_BASE_URL } from "@/utils/api";
-import { ImageWithFallback } from "../components/common/ImageWithFallback";
+import { ImageWithFallback } from "@/components/layout/ImageWithFallback";
+import { formatKoreanDateTime } from "@/utils/date";
 
 interface OrderItem {
   id: number;
@@ -20,6 +21,7 @@ interface Order {
   id: string;
   userId: string;
   date: string;
+  rawCreatedAt?: string;
   status: "배송 준비 중" | "배송 중" | "배송 완료" | "취소";
   items: OrderItem[];
   totalAmount: number;
@@ -80,7 +82,7 @@ export default function OrdersPage() {
     }
 
     loadOrders();
-  }, [isLoggedIn, navigate, isAuthLoading]);
+  }, [isLoggedIn, router, isAuthLoading]);
 
   const getStatusIcon = (status: Order["status"]) => {
     switch (status) {
@@ -161,7 +163,7 @@ export default function OrdersPage() {
             <h2 className="text-xl font-bold mb-2">주문 내역이 없습니다</h2>
             <p className="text-gray-600 mb-6">쇼핑을 시작해보세요!</p>
             <Link
-              to="/"
+              href="/"
               className="inline-block bg-black text-white rounded-[10px] px-8 py-3 font-bold tracking-wider uppercase hover:bg-gray-800"
             >
               쇼핑하러 가기
@@ -182,7 +184,9 @@ export default function OrdersPage() {
                         <p className="text-sm text-gray-600 mb-1">
                           주문번호: {order.id}
                         </p>
-                        <p className="text-xs text-gray-500">{order.date}</p>
+                        <p className="text-xs text-gray-500">
+                          {formatKoreanDateTime(order.rawCreatedAt || order.date) || order.date}
+                        </p>
                       </div>
                     </div>
                     <div
@@ -202,11 +206,15 @@ export default function OrdersPage() {
                     {(order.items || []).map((item) => (
                       <div key={item.id} className="flex gap-4">
                         <div className="w-20 h-20 bg-gray-100 rounded flex-shrink-0 overflow-hidden">
-                          <ImageWithFallback
-                            src={item.image || ""}
-                            alt={item.name || "상품"}
-                            className="w-full h-full object-cover"
-                          />
+                          {item.image ? (
+                            <ImageWithFallback
+                              src={item.image}
+                              alt={item.name || "상품"}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <Package size={24} className="m-auto h-full text-gray-400" />
+                          )}
                         </div>
                         <div className="flex-1">
                           <p className="font-bold mb-1">
@@ -242,7 +250,7 @@ export default function OrdersPage() {
                   {/* Action Buttons */}
                   <div className="mt-4 flex flex-col sm:flex-row gap-2">
                     <Link
-                      to={`/product/${
+                      href={`/product/${
                         order.items?.[0]?.id || order.items?.[0]?.productId || 1
                       }`}
                       className="flex-1 text-center bg-white border border-black text-black rounded px-4 py-2 font-bold hover:bg-gray-50"
@@ -259,7 +267,7 @@ export default function OrdersPage() {
         {/* Back Button */}
         <div className="mt-8 text-center">
           <Link
-            to="/account"
+            href="/account"
             className="inline-block text-gray-600 hover:text-black font-bold"
           >
             ← 내 계정으로 돌아가기

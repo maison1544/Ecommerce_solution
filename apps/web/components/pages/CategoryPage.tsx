@@ -1,83 +1,33 @@
 ﻿import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { useInView } from "react-intersection-observer";
-import { ProductCard } from "../components/ProductCard";
-import { getProductsByCategory } from "../data/products";
-import {
-  useInfiniteProducts,
-  flattenProducts,
-} from "@/hooks/useInfiniteProducts";
-
-const categoryInfo: Record<string, { title: string; description: string }> = {
-  digital: {
-    title: "디지털/가전",
-    description: "최신 디지털 기기와 가전제품을 만나보세요",
-  },
-  fashion: { title: "패션", description: "트렌디한 의류와 신발, 액세서리" },
-  food: { title: "식품", description: "신선하고 건강한 식품" },
-  beauty: { title: "뷰티", description: "프리미엄 뷰티 & 스킨케어" },
-  living: { title: "생활용품", description: "편리한 생활을 위한 필수 용품" },
-  baby: { title: "출산/육아", description: "아이를 위한 안전한 제품" },
-  sports: {
-    title: "스포츠",
-    description: "건강한 라이프스타일을 위한 운동용품",
-  },
-  car: { title: "자동차용품", description: "안전하고 편리한 드라이빙" },
-  books: { title: "도서", description: "베스트셀러와 스테디셀러" },
-  toys: { title: "완구/취미", description: "재미있는 장난감과 취미용품" },
-  office: { title: "문구/사무용품", description: "업무 효율을 높이는 문구류" },
-  pet: { title: "반려동물", description: "반려동물을 위한 모든 것" },
-  "special-deals": {
-    title: "특가할인상품",
-    description: "최대 50%까지 절찬 인 중인 상품을 만나보세요!",
-  },
-};
+import { ProductCard } from "@/components/ProductCard";
+import { getProductsByCategory, type Product } from "@/data/products";
+import { API_BASE_URL, isApiConfigured } from "@/utils/api";
+import { useCategoryNavLabels } from "@/hooks/useCategoryNavLabels";
 
 type SortType = "all" | "low-price" | "high-price";
 
 export default function CategoryPage() {
   const { category } = useParams<{ category: string }>();
   const [sortType, setSortType] = useState<SortType>("all");
-
-  // 무한 스크롤용 Intersection Observer
-  const { ref: loadMoreRef, inView } = useInView({
-    threshold: 0,
-    rootMargin: "100px",
-  });
-
-  // 서버에서 상품 무한 스크롤 로드
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-    isError,
-  } = useInfiniteProducts({
-    category: category || "",
-    sortBy:
-      sortType === "low-price" || sortType === "high-price"
-        ? "price"
-        : "created_at",
-    sortOrder: sortType === "high-price" ? "desc" : "asc",
-    perPage: 20,
-  });
+  const [apiProducts, setApiProducts] = useState<Product[]>([]);
+  const { resolveCategory } = useCategoryNavLabels();
+  const navCategory = resolveCategory(category || "");
+  const categoryKey = navCategory?.categoryKey || category || "";
 
   // 로컬 상품 (API 상품과 병합)
   const localProducts = useMemo(() => {
-    return getProductsByCategory(category || "");
-  }, [category]);
+    return getProductsByCategory(categoryKey);
+  }, [categoryKey]);
 
   // API 상품과 로컬 상품 병합
   const allProducts = useMemo(() => {
-    const apiProducts = flattenProducts(data?.pages);
-    const combined = [...localProducts, ...apiProducts];
-    // 중복 제거
-    return combined.filter(
+    const allProductsList = [...localProducts, ...apiProducts];
+    return allProductsList.filter(
       (product, index, self) =>
         index === self.findIndex((p) => p.id === product.id)
     );
-  }, [data?.pages, localProducts]);
+  }, [apiProducts, localProducts]);
 
   // 정렬 적용
   const sortedProducts = useMemo(() => {
@@ -91,35 +41,40 @@ export default function CategoryPage() {
     });
   }, [allProducts, sortType]);
 
-  const info = categoryInfo[category || ""] || {
-    title: "카테고리",
-    description: "다양한 상품을 만나보세요",
+  const info = {
+    title: navCategory?.label || "카테고리",
+    description: navCategory?.description || "다양한 상품을 만나보세요",
   };
-
-  // 무한 스크롤: 뷰포트에 들어오면 다음 페이지 로드
-  useEffect(() => {
-    if (inView && hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
-    }
-  }, [inView, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // 카테고리 변경 시 스크롤 맨 위로
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [category]);
 
-  if (isLoading) {
-    return (
-      <main className="container mx-auto px-4 lg:px-8 py-8 lg:py-12">
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <div className="text-center">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-gray-300 border-t-black"></div>
-            <p className="mt-4 text-gray-600 font-bold">로딩 중...</p>
-          </div>
-        </div>
-      </main>
-    );
-  }
+  useEffect(() => {
+    const loadProducts = async () => {
+      if (!isApiConfigured || !categoryKey) {
+        setApiProducts([]);
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams({ category: categoryKey });
+        const response = await fetch(`${API_BASE_URL}/api/products?${params}`);
+        if (!response.ok) {
+          setApiProducts([]);
+          return;
+        }
+
+        const data = await response.json();
+        setApiProducts(data.products || []);
+      } catch {
+        setApiProducts([]);
+      }
+    };
+
+    loadProducts();
+  }, [categoryKey]);
 
   return (
     <main className="container mx-auto px-4 lg:px-8 py-8 lg:py-12">
@@ -176,17 +131,8 @@ export default function CategoryPage() {
         </div>
       </div>
 
-      {/* Error State */}
-      {isError && (
-        <div className="text-center py-20">
-          <p className="text-red-500 font-bold text-lg">
-            상품을 불러오는데 실패했습니다.
-          </p>
-        </div>
-      )}
-
       {/* Product Grid */}
-      {sortedProducts.length === 0 && !isError ? (
+      {sortedProducts.length === 0 ? (
         <div className="text-center py-20">
           <p className="text-gray-500 font-bold text-lg">
             등록된 상품이 없습니다.
@@ -213,18 +159,7 @@ export default function CategoryPage() {
             ))}
           </div>
 
-          {/* 무한 스크롤 트리거 */}
-          <div
-            ref={loadMoreRef}
-            className="h-10 flex items-center justify-center mt-8"
-          >
-            {isFetchingNextPage && (
-              <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-gray-300 border-t-black"></div>
-            )}
-            {!hasNextPage && sortedProducts.length > 0 && (
-              <p className="text-gray-400 text-sm">모든 상품을 불러왔습니다</p>
-            )}
-          </div>
+          <div className="h-10 flex items-center justify-center mt-8" />
         </>
       )}
     </main>

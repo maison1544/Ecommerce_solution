@@ -1,21 +1,21 @@
 ﻿import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { CheckCircle } from "lucide-react";
+import { formatKoreanDateTime } from "@/utils/date";
 
 export default function OrderCompletePage() {
   const router = useRouter();
-  const location = useLocation();
   const [order, setOrder] = useState<any | null>(null);
 
   useEffect(() => {
-    const state = location.state as { order: any } | null;
-    if (!state || !state.order) {
+    const storedOrder = sessionStorage.getItem("completedOrder");
+    if (!storedOrder) {
       router.push("/");
       return;
     }
-    setOrder(state.order);
-  }, [location, navigate]);
+    setOrder(JSON.parse(storedOrder));
+  }, [router]);
 
   if (!order) {
     return null;
@@ -56,7 +56,9 @@ export default function OrderCompletePage() {
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">주문일시</span>
-              <span className="font-bold">{order.date}</span>
+              <span className="font-bold">
+                {formatKoreanDateTime(order.rawCreatedAt || order.date) || order.date}
+              </span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-gray-600">결제금액</span>
@@ -100,13 +102,13 @@ export default function OrderCompletePage() {
         {/* Buttons */}
         <div className="flex flex-col sm:flex-row gap-3">
           <Link
-            to="/orders"
+            href="/orders"
             className="flex-1 bg-black text-white rounded-lg py-3 font-bold hover:bg-gray-800 text-center"
           >
             주문 내역 보기
           </Link>
           <Link
-            to="/"
+            href="/"
             className="flex-1 bg-white border-2 border-black text-black rounded-lg py-3 font-bold hover:bg-gray-50 text-center"
           >
             쇼핑 계속하기

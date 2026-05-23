@@ -14,6 +14,7 @@ import { useCart } from "@/context/CartContext";
 import { toast } from "sonner";
 // import { getAddressesByUserId } from "../data/addresses"; // 로컬 데이터 사용 안 함
 import { API_BASE_URL } from "@/utils/api";
+import { formatKoreanDateTime } from "@/utils/date";
 
 interface OrderItem {
   id: number;
@@ -28,6 +29,7 @@ interface Order {
   id: string;
   userId: string;
   date: string;
+  rawCreatedAt?: string;
   status?: "배송 준비 중" | "배송 중" | "배송 완료" | "취소";
   shippingStatus?: string; // API에서 사용하는 필드
   items: OrderItem[];
@@ -44,7 +46,8 @@ interface Order {
 
 export default function AccountPage() {
   const router = useRouter();
-  const { isLoggedIn, currentUser, logout, getAccessToken } = useAuth();
+  const { isLoggedIn, currentUser, logout, getAccessToken, isAuthLoading } =
+    useAuth();
   const { cartCount } = useCart();
   const [addressCount, setAddressCount] = useState(0);
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
@@ -52,6 +55,8 @@ export default function AccountPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (isAuthLoading) return;
+
     if (!isLoggedIn || !currentUser) {
       toast.error("로그인이 필요합니다");
       router.push("/login");
@@ -110,7 +115,7 @@ export default function AccountPage() {
 
     loadAddresses();
     loadOrders();
-  }, [isLoggedIn, currentUser, navigate, getAccessToken]);
+  }, [isLoggedIn, currentUser, router, getAccessToken, isAuthLoading]);
 
   const handleLogout = () => {
     if (confirm("로그아웃 하시겠습니까?")) {
@@ -120,7 +125,7 @@ export default function AccountPage() {
     }
   };
 
-  if (!currentUser) {
+  if (isAuthLoading || !currentUser) {
     return null;
   }
 
@@ -174,7 +179,9 @@ export default function AccountPage() {
                 )}
                 <div className="flex justify-between">
                   <span className="text-gray-600">가입일</span>
-                  <span className="font-bold">{currentUser.createdAt}</span>
+                  <span className="font-bold">
+                    {formatKoreanDateTime(currentUser.createdAt)}
+                  </span>
                 </div>
               </div>
 
@@ -193,7 +200,7 @@ export default function AccountPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {/* Order History */}
               <Link
-                to="/orders"
+                href="/orders"
                 className="bg-white border rounded-lg p-6 hover:shadow-lg transition-shadow"
               >
                 <div className="flex items-start gap-4">
@@ -214,7 +221,7 @@ export default function AccountPage() {
 
               {/* Cart */}
               <Link
-                to="/cart"
+                href="/cart"
                 className="bg-white border rounded-lg p-6 hover:shadow-lg transition-shadow"
               >
                 <div className="flex items-start gap-4">
@@ -235,7 +242,7 @@ export default function AccountPage() {
 
               {/* Delivery Address */}
               <Link
-                to="/addresses"
+                href="/account/addresses"
                 className="bg-white border rounded-lg p-6 hover:shadow-lg transition-shadow"
               >
                 <div className="flex items-start gap-4">
@@ -254,7 +261,7 @@ export default function AccountPage() {
 
               {/* Account Settings */}
               <Link
-                to="/settings"
+                href="/account/settings"
                 className="bg-white border rounded-lg p-6 hover:shadow-lg transition-shadow"
               >
                 <div className="flex items-start gap-4">
@@ -299,7 +306,7 @@ export default function AccountPage() {
                             {items.length > 1 && ` 외 ${items.length - 1}개`}
                           </p>
                           <p className="text-xs text-gray-500">
-                            {order.date || "날짜 없음"} 주문
+                            {formatKoreanDateTime(order.rawCreatedAt || order.date) || "날짜 없음"} 주문
                           </p>
                           <p className="text-xs text-[#b78b1f] mt-1">
                             {order.shippingStatus || order.status || "주문접수"}
@@ -320,7 +327,7 @@ export default function AccountPage() {
                 </div>
               )}
               <Link
-                to="/orders"
+                href="/orders"
                 className="block text-center mt-4 text-sm text-gray-600 hover:text-black"
               >
                 전체 주문 내역 보기 →

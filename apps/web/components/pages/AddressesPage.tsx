@@ -5,7 +5,7 @@ import { MapPin, Plus, Edit, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/context/AuthContext";
 import { API_BASE_URL } from "@/utils/api";
-import { formatPhoneNumber } from "../utils/phoneFormat";
+import { formatPhoneNumber } from "@/utils/phoneFormat";
 
 interface Address {
   id: number;
@@ -88,7 +88,7 @@ export default function AddressesPage() {
     }
 
     loadAddresses();
-  }, [isLoggedIn, navigate, isAuthLoading]);
+  }, [isLoggedIn, router, isAuthLoading]);
 
   // Validation functions
   const validateName = (name: string): string => {
@@ -665,7 +665,7 @@ export default function AddressesPage() {
         {/* Back Button */}
         <div className="mt-8 text-center">
           <Link
-            to="/account"
+            href="/account"
             className="inline-block text-gray-600 hover:text-black font-bold"
           >
             ← 내 계정으로 돌아가기

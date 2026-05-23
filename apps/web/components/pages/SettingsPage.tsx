@@ -5,8 +5,7 @@ import { User, Lock, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
-import { API_BASE_URL } from "@/utils/api";
-import { formatPhoneNumber } from "../utils/phoneFormat";
+import { formatPhoneNumber } from "@/utils/phoneFormat";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -24,26 +23,13 @@ export default function SettingsPage() {
       toast.error("로그인이 필요합니다");
       router.push("/login");
     }
-  }, [isLoggedIn, currentUser, navigate, isAuthLoading]);
-
-  // 로딩 중이면 로딩 표시
-  if (isAuthLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#b78b1f]"></div>
-      </div>
-    );
-  }
-
-  if (!currentUser) {
-    return null;
-  }
+  }, [isLoggedIn, currentUser, router, isAuthLoading]);
 
   // Profile Form
   const [profileForm, setProfileForm] = useState({
-    name: currentUser.name || "",
-    email: currentUser.email || "",
-    phone: currentUser.phone || "",
+    name: currentUser?.name || "",
+    email: currentUser?.email || "",
+    phone: currentUser?.phone || "",
   });
 
   const [profileErrors, setProfileErrors] = useState({
@@ -71,6 +57,29 @@ export default function SettingsPage() {
     confirm: false,
   });
 
+  useEffect(() => {
+    if (!currentUser) return;
+
+    setProfileForm({
+      name: currentUser.name || "",
+      email: currentUser.email || "",
+      phone: currentUser.phone || "",
+    });
+  }, [currentUser]);
+
+  // 로딩 중이면 로딩 표시
+  if (isAuthLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-[#b78b1f]"></div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return null;
+  }
+
   // Validation functions
   const validateName = (name: string): string => {
     if (!name.trim()) return "이름을 입력해주세요";
@@ -80,53 +89,11 @@ export default function SettingsPage() {
     return "";
   };
 
-  const validateEmail = (email: string): string => {
-    if (!email.trim()) return "이메일을 입력해주세요";
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-      return "올바른 이메일 형식이 아닙니다";
-    return "";
-  };
-
   const validatePhone = (phone: string): string => {
     if (!phone.trim()) return "전화번호를 입력해주세요";
     if (!/^01[0-9]-\d{4}-\d{4}$/.test(phone))
       return "010-0000-0000 형식으로 입력해주세요";
     return "";
-  };
-
-  // 이메일 중복 확인
-  const checkEmailDuplicate = async (email: string): Promise<boolean> => {
-    // 현재 사용자의 이메일과 같으면 확인 불필요
-    if (email === currentUser.email) {
-      return false;
-    }
-
-    if (!email || validateEmail(email)) {
-      return false;
-    }
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/check-email`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.exists) {
-          setProfileErrors((prev) => ({
-            ...prev,
-            email: data.message || "이미 사용 중인 이메일입니다",
-          }));
-          return true; // 중복됨
-        }
-      }
-      return false; // 중복 아님
-    } catch (error) {
-      console.error("Email check failed:", error);
-      return false;
-    }
   };
 
   const validatePassword = (password: string): string => {
@@ -144,7 +111,6 @@ export default function SettingsPage() {
     // Real-time validation
     let error = "";
     if (field === "name") error = validateName(value);
-    else if (field === "email") error = validateEmail(value);
     else if (field === "phone") error = validatePhone(value);
 
     setProfileErrors({ ...profileErrors, [field]: error });
@@ -175,7 +141,7 @@ export default function SettingsPage() {
     // Validate all fields
     const errors = {
       name: validateName(profileForm.name),
-      email: validateEmail(profileForm.email),
+      email: "",
       phone: validatePhone(profileForm.phone),
     };
 
@@ -183,15 +149,6 @@ export default function SettingsPage() {
 
     if (errors.name || errors.email || errors.phone) {
       return;
-    }
-
-    // 이메일이 변경된 경우 중복 확인
-    if (profileForm.email !== currentUser.email) {
-      const isDuplicate = await checkEmailDuplicate(profileForm.email);
-      if (isDuplicate) {
-        toast.error("이미 사용 중인 이메일입니다");
-        return;
-      }
     }
 
     setIsSubmitting(true);
@@ -359,17 +316,13 @@ export default function SettingsPage() {
                 <input
                   type="email"
                   value={profileForm.email}
-                  onChange={(e) => handleProfileChange("email", e.target.value)}
-                  className={`w-full bg-[#eeeeee] rounded border px-4 py-3 text-sm outline-none focus:border-black ${
-                    profileErrors.email ? "border-red-500" : "border-[#eeeeee]"
-                  }`}
-                  required
+                  readOnly
+                  disabled
+                  className="w-full cursor-not-allowed rounded border border-gray-300 bg-gray-100 px-4 py-3 text-sm text-gray-600 outline-none"
                 />
-                {profileErrors.email && (
-                  <p className="text-red-500 text-xs mt-1">
-                    {profileErrors.email}
-                  </p>
-                )}
+                <p className="mt-1 text-xs text-gray-500">
+                  이메일은 보안 정책상 변경할 수 없습니다.
+                </p>
               </div>
 
               <div>
@@ -564,7 +517,7 @@ export default function SettingsPage() {
         {/* Back Button */}
         <div className="mt-8 text-center">
           <Link
-            to="/account"
+            href="/account"
             className="inline-block text-gray-600 hover:text-black font-bold"
           >
             ← 내 계정으로 돌아가기

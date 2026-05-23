@@ -7,7 +7,8 @@
   useCallback,
   useRef,
 } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, isSupabaseConfigured } from "@/lib/supabase/client";
+import { useAppScope } from "@/context/AppScopeContext";
 import { API_BASE_URL } from "@/utils/api";
 
 interface CartContextType {
@@ -33,6 +34,7 @@ const CartContext = createContext<CartContextType | undefined>(undefined);
 // API Base URL is configured via environment variables
 
 export function CartProvider({ children }: { children: ReactNode }) {
+  const { appScope } = useAppScope();
   const [cartCount, setCartCount] = useState(0);
   const [isAddingToCart, setIsAddingToCart] = useState(false);
   const [isClearingCart, setIsClearingCart] = useState(false);
@@ -55,7 +57,17 @@ export function CartProvider({ children }: { children: ReactNode }) {
       return sessionCacheRef.current.token;
     }
 
-    const supabase = createClient();
+    if (appScope !== "user") {
+      sessionCacheRef.current = null;
+      return null;
+    }
+
+    if (!isSupabaseConfigured()) {
+      sessionCacheRef.current = null;
+      return null;
+    }
+
+    const supabase = createClient(appScope);
 
     // 🔥 먼저 getUser()로 force_logout 확인
     const {
@@ -94,7 +106,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     };
 
     return session.access_token;
-  }, []);
+  }, [appScope]);
 
   const refreshCart = useCallback(async () => {
     try {

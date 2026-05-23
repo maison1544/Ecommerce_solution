@@ -1,11 +1,11 @@
 ﻿import { useState, useEffect } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Home, Building, Plus, ChevronDown } from "lucide-react";
 import { API_BASE_URL } from "@/utils/api";
-import { ImageWithFallback } from "../components/common/ImageWithFallback";
-import { formatPhoneNumber } from "../utils/phoneFormat";
+import { ImageWithFallback } from "@/components/layout/ImageWithFallback";
+import { formatPhoneNumber } from "@/utils/phoneFormat";
 
 interface CheckoutProduct {
   productId: number;
@@ -30,8 +30,10 @@ interface Address {
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const location = useLocation();
   const { isLoggedIn, getAccessToken, isAuthLoading } = useAuth();
+  const [checkoutType, setCheckoutType] = useState<"direct" | "cart" | null>(
+    null
+  );
   const [products, setProducts] = useState<CheckoutProduct[]>([]);
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<number | null>(
@@ -107,17 +109,21 @@ export default function CheckoutPage() {
     const loadItems = async () => {
       try {
         setLoading(true);
-        const state = location.state as {
-          type: "direct" | "cart";
-          productId?: number;
-          quantity?: number;
-        } | null;
+        const storedState = sessionStorage.getItem("checkoutState");
+        const state = storedState
+          ? (JSON.parse(storedState) as {
+              type: "direct" | "cart";
+              productId?: number;
+              quantity?: number;
+            })
+          : null;
 
         if (!state) {
           toast.error("잘못된 접근입니다");
           router.push("/");
           return;
         }
+        setCheckoutType(state.type);
 
         if (state.type === "direct" && state.productId) {
           // 직접 구매 - API에서 상품 정보 조회
@@ -219,7 +225,7 @@ export default function CheckoutPage() {
 
     loadAddresses();
     loadItems();
-  }, [isLoggedIn, navigate, location.state, getAccessToken, isAuthLoading]);
+  }, [isLoggedIn, router, getAccessToken, isAuthLoading]);
 
   // Validation functions
   const validateName = (name: string): string => {
@@ -407,8 +413,7 @@ export default function CheckoutPage() {
         const newOrder = data.order;
 
         // 장바구니에서 구매한 경우 장바구니 비우기
-        const state = location.state as { type: "direct" | "cart" } | null;
-        if (state?.type === "cart") {
+        if (checkoutType === "cart") {
           try {
             // 모든 장바구니 아이템 삭제 요청
             const cartResponse = await fetch(`${API_BASE_URL}/api/cart/clear`, {
@@ -428,7 +433,9 @@ export default function CheckoutPage() {
         }
 
         // 주문 완료 페이지로 이동
-        router.push("/order-complete", { state: { order: newOrder } });
+        sessionStorage.removeItem("checkoutState");
+        sessionStorage.setItem("completedOrder", JSON.stringify(newOrder));
+        router.push("/order-complete");
       } else {
         toast.error("주문 생성에 실패했습니다");
       }

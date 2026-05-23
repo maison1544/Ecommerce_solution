@@ -1,27 +1,43 @@
 ﻿import Link from "next/link";
 import { useMemo, useState, useEffect } from "react";
 import { ArrowRight, TrendingUp, Shield, Truck } from "lucide-react";
-import { ProductCard } from "../components/ProductCard";
-import { products, Product } from "../data/products";
+import { ProductCard } from "@/components/ProductCard";
+import { products, Product } from "@/data/products";
 import { useAuth } from "@/context/AuthContext";
-import { API_BASE_URL } from "@/utils/api";
+import { API_BASE_URL, isApiConfigured } from "@/utils/api";
+import { useCategoryNavLabels } from "@/hooks/useCategoryNavLabels";
 
 export default function MainPage() {
   const { isLoggedIn } = useAuth();
-  const [allProducts, setAllProducts] = useState<Product[]>(products);
+  const [allProducts, setAllProducts] = useState<Product[]>(
+    products.filter((product) => product.category === "special-deals")
+  );
   const [loading, setLoading] = useState(true);
+  const { labels, resolveCategory } = useCategoryNavLabels();
+  const visibleCategories = labels.filter((category) => category.categoryKey !== "special-deals");
+  const specialDealsSlug = resolveCategory("special-deals")?.slug || "13";
 
   // Load products from API
   useEffect(() => {
     const loadProducts = async () => {
+      if (!isApiConfigured) {
+        setAllProducts(products.filter((product) => product.category === "special-deals"));
+        setLoading(false);
+        return;
+      }
+
       try {
         const API_BASE = `${API_BASE_URL}`;
-        const response = await fetch(`${API_BASE}/api/products`);
+        const params = new URLSearchParams({ category: "special-deals" });
+        const response = await fetch(`${API_BASE}/api/products?${params}`);
 
         if (response.ok) {
           const data = await response.json();
           const apiProducts = data.products || [];
-          const allProductsList = [...products, ...apiProducts];
+          const allProductsList = [
+            ...products.filter((product) => product.category === "special-deals"),
+            ...apiProducts,
+          ];
           const uniqueProducts = allProductsList.filter(
             (product, index, self) =>
               index === self.findIndex((p) => p.id === product.id)
@@ -31,7 +47,7 @@ export default function MainPage() {
       } catch (error) {
         console.error("Failed to load products:", error);
         // API 실패 시 로컬 데이터 사용
-        setAllProducts(products);
+        setAllProducts(products.filter((product) => product.category === "special-deals"));
       } finally {
         setLoading(false);
       }
@@ -42,7 +58,7 @@ export default function MainPage() {
 
   // 특가 상품 4개만 표시 - useMemo로 최적화
   const featuredProducts = useMemo(
-    () => allProducts.filter((p) => p.category === "special-deals").slice(0, 4),
+    () => allProducts.slice(0, 4),
     [allProducts]
   );
 
@@ -61,7 +77,7 @@ export default function MainPage() {
               프리미엄 상품을 특별한 가격으로 만나보세요
             </p>
             <Link
-              to="/category/special-deals"
+              href={`/category/${specialDealsSlug}`}
               className="inline-flex items-center gap-2 bg-black text-white rounded-[10px] px-8 py-4 font-bold tracking-wider uppercase hover:bg-gray-800 transition-colors"
             >
               지금 쇼핑하기
@@ -150,7 +166,7 @@ export default function MainPage() {
 
           <div className="text-center mt-8">
             <Link
-              to="/category/special-deals"
+              href={`/category/${specialDealsSlug}`}
               className="inline-flex items-center gap-2 bg-white border-2 border-black text-black rounded-[10px] px-8 py-3 font-bold tracking-wider uppercase hover:bg-black hover:text-white transition-colors"
             >
               모든 특가 상품 보기
@@ -173,26 +189,13 @@ export default function MainPage() {
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 max-w-6xl mx-auto">
-            {[
-              { name: "디지털/가전", path: "/category/digital" },
-              { name: "패션", path: "/category/fashion" },
-              { name: "식품", path: "/category/food" },
-              { name: "뷰티", path: "/category/beauty" },
-              { name: "생활용품", path: "/category/living" },
-              { name: "출산/육아", path: "/category/baby" },
-              { name: "스포츠", path: "/category/sports" },
-              { name: "자동차용품", path: "/category/car" },
-              { name: "도서", path: "/category/books" },
-              { name: "완구/취미", path: "/category/toys" },
-              { name: "문구/사무용품", path: "/category/office" },
-              { name: "반려동물", path: "/category/pet" },
-            ].map((category) => (
+            {visibleCategories.map((category) => (
               <Link
-                key={category.path}
-                to={category.path}
+                key={category.categoryKey}
+                href={`/category/${category.slug}`}
                 className="bg-white border-2 border-gray-200 rounded-lg p-6 text-center font-bold hover:border-[#b78b1f] hover:text-[#b78b1f] transition-colors"
               >
-                {category.name}
+                {category.label}
               </Link>
             ))}
           </div>
@@ -211,13 +214,13 @@ export default function MainPage() {
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link
-                to="/signup"
+                href="/signup"
                 className="inline-flex items-center justify-center gap-2 bg-[#b78b1f] text-white rounded-[10px] px-8 py-4 font-bold tracking-wider uppercase hover:bg-[#9a7319] transition-colors"
               >
                 회원가입하기
               </Link>
               <Link
-                to="/category/special-deals"
+                href={`/category/${specialDealsSlug}`}
                 className="inline-flex items-center justify-center gap-2 bg-white text-black rounded-[10px] px-8 py-4 font-bold tracking-wider uppercase hover:bg-gray-100 transition-colors"
               >
                 특가 상품 보기

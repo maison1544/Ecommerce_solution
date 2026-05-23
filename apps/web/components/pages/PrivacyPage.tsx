@@ -1,4 +1,4 @@
-export default function PrivacyPage() {
+﻿export default function PrivacyPage() {
   return (
     <main className="container mx-auto px-4 lg:px-8 py-8 lg:py-12">
       <div className="max-w-4xl mx-auto">

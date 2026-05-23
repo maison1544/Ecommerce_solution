@@ -1,3 +1,10 @@
 ﻿"use client";
-import { SearchResultsPage } from "@/components/pages/SearchResultsPage";
-export default function Route() { return <SearchResultsPage />; }
+import { Suspense } from "react";
+import SearchResultsPage from "@/components/pages/SearchResultsPage";
+export default function Route() {
+  return (
+    <Suspense fallback={null}>
+      <SearchResultsPage />
+    </Suspense>
+  );
+}

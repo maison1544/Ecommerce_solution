@@ -14,15 +14,16 @@ export function ImageWithFallback(
   const [validSrc, setValidSrc] = useState(props.src);
 
   useEffect(() => {
+    const nextSrc = typeof props.src === "string" ? props.src : undefined;
     // 잘못된 URL 패턴 감지하고 placeholder로 교체
     if (
-      props.src &&
-      props.src.startsWith("data:") === false &&
-      !props.src.startsWith("http")
+      nextSrc &&
+      nextSrc.startsWith("data:") === false &&
+      !nextSrc.startsWith("http")
     ) {
       setValidSrc(PLACEHOLDER_IMG_SRC);
     } else {
-      setValidSrc(props.src);
+      setValidSrc(nextSrc);
     }
   }, [props.src]);
 

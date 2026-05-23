@@ -1,5 +1,5 @@
-﻿import { useInfiniteQuery } from "@tanstack/react-query";
-import { API_BASE_URL } from "@/utils/api";
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
+import { API_BASE_URL, isApiConfigured } from "@/utils/api";
 
 const API_BASE = `${API_BASE_URL}`;
 
@@ -47,34 +47,75 @@ export function useInfiniteProducts({
   perPage = 20,
   enabled = true,
 }: UseInfiniteProductsOptions = {}) {
-  return useInfiniteQuery<ProductsResponse>({
-    queryKey: ["products", category, search, sortBy, sortOrder],
-    queryFn: async ({ pageParam = 1 }) => {
-      const params = new URLSearchParams({
-        page: String(pageParam),
-        perPage: String(perPage),
-        ...(category && { category }),
-        ...(search && { search }),
-        sortBy,
-        sortOrder,
-      });
+  const [pages, setPages] = useState<ProductsResponse[]>([]);
+  const [page, setPage] = useState(1);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingNextPage, setIsFetchingNextPage] = useState(false);
+  const [isError, setIsError] = useState(false);
 
-      const response = await fetch(`${API_BASE}/api/products?${params}`);
+  const hasNextPage = pages.at(-1)?.pagination?.hasMore ?? false;
 
-      if (!response.ok) {
-        throw new Error("Failed to fetch products");
+  const loadPage = useCallback(
+    async (pageToLoad: number) => {
+      if (!enabled || !isApiConfigured) return;
+
+      if (pageToLoad === 1) {
+        setIsLoading(true);
+      } else {
+        setIsFetchingNextPage(true);
       }
+      setIsError(false);
 
-      return response.json();
+      try {
+        const params = new URLSearchParams({
+          page: String(pageToLoad),
+          perPage: String(perPage),
+          ...(category && { category }),
+          ...(search && { search }),
+          sortBy,
+          sortOrder,
+        });
+
+        const response = await fetch(`${API_BASE}/api/products?${params}`);
+        if (!response.ok) {
+          throw new Error("Failed to fetch products");
+        }
+
+        const data = (await response.json()) as ProductsResponse;
+        setPages((prev) => (pageToLoad === 1 ? [data] : [...prev, data]));
+        setPage(pageToLoad);
+      } catch {
+        setIsError(true);
+      } finally {
+        setIsLoading(false);
+        setIsFetchingNextPage(false);
+      }
     },
-    initialPageParam: 1,
-    getNextPageParam: (lastPage) => {
-      if (!lastPage.pagination?.hasMore) return undefined;
-      return lastPage.pagination.page + 1;
-    },
-    staleTime: 5 * 60 * 1000, // 5분
-    enabled,
-  });
+    [category, enabled, perPage, search, sortBy, sortOrder]
+  );
+
+  useEffect(() => {
+    setPages([]);
+    setPage(1);
+    void loadPage(1);
+  }, [loadPage]);
+
+  const fetchNextPage = useCallback(() => {
+    if (!hasNextPage || isFetchingNextPage) return;
+    void loadPage(page + 1);
+  }, [hasNextPage, isFetchingNextPage, loadPage, page]);
+
+  return useMemo(
+    () => ({
+      data: { pages },
+      fetchNextPage,
+      hasNextPage,
+      isFetchingNextPage,
+      isLoading,
+      isError,
+    }),
+    [fetchNextPage, hasNextPage, isError, isFetchingNextPage, isLoading, pages]
+  );
 }
 
 // 모든 페이지의 상품을 플랫하게 변환하는 유틸리티
