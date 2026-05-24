@@ -64,12 +64,18 @@ export async function middleware(request: NextRequest) {
   const hostScope = resolveAppInstanceFromHost(hostname);
   const appScope = resolveAppInstance({ hostname, pathname });
   const originalPathScope = resolveAppInstanceFromPathname(pathname);
+  const shouldUsePathScope = originalPathScope === "admin";
 
-  if (hostScope && originalPathScope !== "user" && originalPathScope !== appScope) {
+  if (
+    hostScope &&
+    !shouldUsePathScope &&
+    originalPathScope !== "user" &&
+    originalPathScope !== appScope
+  ) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 
-  const scopedPathname = hostScope
+  const scopedPathname = hostScope && !shouldUsePathScope
     ? resolveScopedPathname(pathname, appScope)
     : pathname;
   const pathScope = resolveAppInstanceFromPathname(scopedPathname);
@@ -93,13 +99,14 @@ export async function middleware(request: NextRequest) {
   const { response, user } = await updateSession(request, appScope);
 
   if (!user) {
-    const loginPath = hostScope ? "/login" : LOGIN_PATH_BY_SCOPE[appScope];
+    const loginPath =
+      hostScope && !shouldUsePathScope ? "/login" : LOGIN_PATH_BY_SCOPE[appScope];
     return NextResponse.redirect(new URL(loginPath, request.url));
   }
 
   const role = user.app_metadata?.role || "customer";
   if (appScope === "admin" && role !== "admin") {
-    const loginPath = hostScope ? "/login" : "/admin/login";
+    const loginPath = hostScope && !shouldUsePathScope ? "/login" : "/admin/login";
     return NextResponse.redirect(new URL(loginPath, request.url));
   }
 

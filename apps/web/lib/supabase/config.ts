@@ -25,12 +25,15 @@ export function resolveAppInstance(input?: {
   hostname?: string;
   pathname?: string;
 }): AppInstance {
+  const fromPath = input?.pathname
+    ? resolveAppInstanceFromPathname(input.pathname)
+    : null;
+  if (fromPath === "admin") return fromPath;
+
   const fromHost = resolveAppInstanceFromHost(input?.hostname ?? "");
   if (fromHost) return fromHost;
 
-  if (input?.pathname) {
-    return resolveAppInstanceFromPathname(input.pathname);
-  }
+  if (fromPath) return fromPath;
 
   const raw =
     typeof window !== "undefined"
