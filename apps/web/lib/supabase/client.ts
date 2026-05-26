@@ -1,7 +1,6 @@
 import { createBrowserClient } from "@supabase/ssr";
 import {
   getSupabaseCookieOptions,
-  getSupabaseAuthStorageKey,
   resolveBrowserAppInstance,
   type AppInstance,
 } from "./config";
@@ -39,9 +38,6 @@ function createScopedClient(instance: AppInstance) {
     {
       isSingleton: false,
       cookieOptions: getSupabaseCookieOptions(instance),
-      auth: {
-        storageKey: getSupabaseAuthStorageKey(instance),
-      },
     },
   );
 }

@@ -7,7 +7,7 @@ export async function updateSession(
   appScope: AppInstance = "user",
 ) {
   let supabaseResponse = NextResponse.next({ request });
-  const cookieName = getSupabaseCookieOptions(appScope).name;
+  const cookieOptions = getSupabaseCookieOptions(appScope);
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -33,15 +33,30 @@ export async function updateSession(
           );
         },
       },
-      cookieOptions: {
-        name: cookieName,
-      },
+      cookieOptions,
     },
   );
 
   const {
     data: { user },
+    error,
   } = await supabase.auth.getUser();
+
+  if (
+    error &&
+    (process.env.NODE_ENV !== "production" ||
+      process.env.NEXT_PUBLIC_AUTH_DEBUG === "true")
+  ) {
+    console.warn("Supabase auth getUser failed", {
+      hostname: request.nextUrl.hostname,
+      pathname: request.nextUrl.pathname,
+      appScope,
+      cookieName: cookieOptions.name,
+      requestCookieNames: request.cookies.getAll().map(({ name }) => name),
+      errorMessage: error.message,
+      errorCode: (error as { code?: string }).code,
+    });
+  }
 
   return { response: supabaseResponse, user };
 }

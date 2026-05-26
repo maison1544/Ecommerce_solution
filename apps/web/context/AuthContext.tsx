@@ -7,6 +7,7 @@ import {
   useCallback,
 } from "react";
 import { createClient, resetClient } from "@/lib/supabase/client";
+import { clearStaleSupabaseAuthCookies } from "@/lib/supabase/cookies";
 import { useAppScope } from "@/context/AppScopeContext";
 import { API_BASE_URL } from "@/utils/api";
 
@@ -308,6 +309,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
       }
 
+      clearStaleSupabaseAuthCookies(appScope);
+      resetClient(appScope);
       const supabase = createClient(appScope);
       const { error: sessionError } = await supabase.auth.setSession({
         access_token: result.session.access_token,

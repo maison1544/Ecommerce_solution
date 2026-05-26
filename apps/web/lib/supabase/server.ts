@@ -4,7 +4,7 @@ import { getSupabaseCookieOptions, type AppInstance } from "./config";
 
 export async function createClient(appScope: AppInstance = "user") {
   const cookieStore = await cookies();
-  const cookieName = getSupabaseCookieOptions(appScope).name;
+  const cookieOptions = getSupabaseCookieOptions(appScope);
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -24,9 +24,7 @@ export async function createClient(appScope: AppInstance = "user") {
           }
         },
       },
-      cookieOptions: {
-        name: cookieName,
-      },
+      cookieOptions,
     },
   );
 }

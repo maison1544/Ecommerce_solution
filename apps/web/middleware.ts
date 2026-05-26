@@ -53,8 +53,27 @@ function copySessionCookies(target: NextResponse, source: NextResponse) {
   return target;
 }
 
+function getCanonicalRedirect(request: NextRequest) {
+  const canonicalHost = process.env.NEXT_PUBLIC_CANONICAL_HOST?.trim().toLowerCase();
+  const hostname = request.nextUrl.hostname.toLowerCase();
+
+  if (!canonicalHost || hostname !== `www.${canonicalHost}`) {
+    return null;
+  }
+
+  const redirectUrl = request.nextUrl.clone();
+  redirectUrl.protocol = "https:";
+  redirectUrl.hostname = canonicalHost;
+  return NextResponse.redirect(redirectUrl, 308);
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  const canonicalRedirect = getCanonicalRedirect(request);
+
+  if (canonicalRedirect) {
+    return canonicalRedirect;
+  }
 
   if (pathname.startsWith("/api/")) {
     return NextResponse.next();
