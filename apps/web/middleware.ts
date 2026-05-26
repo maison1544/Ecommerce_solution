@@ -54,8 +54,16 @@ function copySessionCookies(target: NextResponse, source: NextResponse) {
 }
 
 function getCanonicalRedirect(request: NextRequest) {
-  const canonicalHost = process.env.NEXT_PUBLIC_CANONICAL_HOST?.trim().toLowerCase();
   const hostname = request.nextUrl.hostname.toLowerCase();
+  const configuredCanonicalHost =
+    process.env.NEXT_PUBLIC_CANONICAL_HOST?.trim().toLowerCase();
+  const inferredCanonicalHost =
+    hostname.startsWith("www.") &&
+    !hostname.endsWith(".vercel.app") &&
+    hostname !== "www.localhost"
+      ? hostname.slice(4)
+      : null;
+  const canonicalHost = configuredCanonicalHost || inferredCanonicalHost;
 
   if (!canonicalHost || hostname !== `www.${canonicalHost}`) {
     return null;
